@@ -38,7 +38,7 @@ with col2:
 
 # 3. SCARICO DATI BENCHMARK
 start_date = df_trans['date'].min()
-end_date = pd.Timestamp.today()
+end_date = df_prices['date'].max()
 
 if bench_ticker:
     with st.spinner(f"Calcolo simulazione su {bench_ticker}..."):
