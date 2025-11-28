@@ -15,7 +15,7 @@ st.sidebar.success("Menu Caricato Correttamente")
 with st.sidebar:
     st.header("Navigazione")
     # Link alla Home (questo file)
-    st.page_link("app.py", label="Home", icon="🏠")
+    #st.page_link("app.py", label="Home", icon="🏠")
     
     # Link alle altre pagine (assicurati che i nomi dei file siano esatti)
     st.page_link("pages/1_Analisi_Asset.py", label="Analisi Asset", icon="🔎")
