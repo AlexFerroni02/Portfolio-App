@@ -8,10 +8,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta, date
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Portfolio Manager", layout="wide", page_icon="📈")
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(page_title="Portfolio Pro", layout="wide", page_icon="🚀")
 
-# --- GESTIONE NAVIGAZIONE (Il trucco per cambiare pagina) ---
+# --- GESTIONE NAVIGAZIONE (Stato della Sessione) ---
 if 'page' not in st.session_state:
     st.session_state.page = 'home'
 if 'selected_ticker' not in st.session_state:
@@ -64,7 +64,7 @@ def save_data(df, sheet_name):
             wks.update([df_str.columns.values.tolist()] + df_str.values.tolist())
     except Exception as e: st.error(f"Errore salvataggio {sheet_name}: {e}")
 
-# --- PARSING E UTILS ---
+# --- PARSING E CALCOLI ---
 def parse_degiro_csv(file):
     df = pd.read_csv(file)
     cols = ['Quantità', 'Quotazione', 'Valore', 'Costi di transazione', 'Totale']
@@ -134,50 +134,47 @@ def color_pnl(val):
 #               VISTA: DASHBOARD
 # ==========================================
 def render_dashboard(df_trans, df_map, df_prices):
-    st.title("🏠 Dashboard Portafoglio")
+    st.title("🚀 Dashboard Portafoglio")
 
-    # --- SIDEBAR ---
+    # --- SIDEBAR (Import & Sync) ---
     with st.sidebar:
-        st.header("1. Importa CSV")
-        up = st.file_uploader("Carica Transactions.csv", type=['csv'])
-        if up and st.button("Importa"):
-            ndf = parse_degiro_csv(up)
-            rows = []
-            exist = df_trans['id'].tolist() if not df_trans.empty else []
-            c = 0
-            for idx, r in ndf.iterrows():
-                if pd.isna(r['ISIN']): continue
-                tid = generate_id(r, idx)
-                if tid not in exist:
-                    val = r['Totale'] if r['Totale'] != 0 else r['Valore']
-                    rows.append({
-                        'id': tid, 'date': r['Data'].strftime('%Y-%m-%d'),
-                        'product': r['Prodotto'], 'isin': r['ISIN'],
-                        'quantity': r['Quantità'], 'local_value': val,
-                        'fees': r['Costi di transazione'], 'currency': 'EUR'
-                    })
-                    exist.append(tid)
-                    c += 1
-            if rows:
-                new_df = pd.concat([df_trans, pd.DataFrame(rows)], ignore_index=True)
-                save_data(new_df, "transactions")
-                st.success(f"✅ Importate {c} righe.")
-                st.rerun()
+        st.header("Gestione")
+        with st.expander("📂 Importa CSV"):
+            up = st.file_uploader("File Degiro", type=['csv'])
+            if up and st.button("Importa"):
+                ndf = parse_degiro_csv(up)
+                rows = []
+                exist = df_trans['id'].tolist() if not df_trans.empty else []
+                c = 0
+                for idx, r in ndf.iterrows():
+                    if pd.isna(r['ISIN']): continue
+                    tid = generate_id(r, idx)
+                    if tid not in exist:
+                        val = r['Totale'] if r['Totale'] != 0 else r['Valore']
+                        rows.append({
+                            'id': tid, 'date': r['Data'].strftime('%Y-%m-%d'),
+                            'product': r['Prodotto'], 'isin': r['ISIN'],
+                            'quantity': r['Quantità'], 'local_value': val,
+                            'fees': r['Costi di transazione'], 'currency': 'EUR'
+                        })
+                        exist.append(tid)
+                        c += 1
+                if rows:
+                    new_df = pd.concat([df_trans, pd.DataFrame(rows)], ignore_index=True)
+                    save_data(new_df, "transactions")
+                    st.success(f"✅ +{c} righe.")
+                    st.rerun()
         
-        st.divider()
-        st.header("2. Aggiorna Prezzi")
-        if not df_map.empty:
-            if st.button("🔄 Scarica da Yahoo"):
+        if st.button("🔄 Aggiorna Prezzi Yahoo"):
+            if not df_map.empty:
                 with st.spinner("Scaricamento..."):
                     n = sync_prices(df_map['ticker'].unique().tolist())
-                st.success(f"Aggiornati {n} prezzi.")
+                st.success(f"Fatto. {n} nuovi prezzi.")
                 st.rerun()
-        else:
-            st.warning("Mapping vuoto.")
 
-    # --- CONTROLLO MAPPING ---
+    # --- CONTROLLI PRELIMINARI ---
     if df_trans.empty:
-        st.info("👋 Database vuoto. Carica il CSV dal menu a sinistra.")
+        st.info("👋 Database vuoto. Inizia importando il CSV dal menu a sinistra.")
         return
 
     all_isins = df_trans['isin'].unique()
@@ -185,14 +182,15 @@ def render_dashboard(df_trans, df_map, df_prices):
     missing = [i for i in all_isins if i not in mapped_isins]
     
     if missing:
-        st.warning(f"⚠️ Trovati {len(missing)} ETF senza Ticker!")
+        st.warning(f"⚠️ {len(missing)} ETF senza Ticker!")
+        st.write("Inserisci i codici Yahoo per vederli (es. `SWDA.MI`).")
         with st.form("map_form"):
             new_maps = []
             for m in missing:
                 prod = df_trans[df_trans['isin']==m]['product'].iloc[0]
                 col1, col2 = st.columns([3,1])
                 col1.text(f"{prod}\n{m}")
-                val = col2.text_input("Ticker Yahoo", key=m)
+                val = col2.text_input("Ticker", key=m)
                 if val: new_maps.append({'isin': m, 'ticker': val.strip()})
             if st.form_submit_button("Salva Mappatura"):
                 if new_maps:
@@ -203,10 +201,10 @@ def render_dashboard(df_trans, df_map, df_prices):
         return
 
     if df_prices.empty:
-        st.warning("⚠️ Mancano i prezzi. Clicca 'Scarica da Yahoo' a sinistra.")
+        st.warning("⚠️ Mancano i prezzi. Clicca 'Aggiorna Prezzi Yahoo' nel menu.")
         return
 
-    # --- CALCOLI DASHBOARD ---
+    # --- CALCOLI ---
     df_trans['date'] = pd.to_datetime(df_trans['date'], errors='coerce').dt.normalize()
     df_prices['date'] = pd.to_datetime(df_prices['date'], errors='coerce').dt.normalize()
     df_trans = df_trans.dropna(subset=['date'])
@@ -224,19 +222,44 @@ def render_dashboard(df_trans, df_map, df_prices):
     view['pnl'] = view['mkt_val'] - view['net_invested']
     view['pnl%'] = (view['pnl']/view['net_invested'])*100
     
-    # KPI
-    c1, c2, c3 = st.columns(3)
+    # KPI Totali
     tot_val = view['mkt_val'].sum()
     tot_inv = view['net_invested'].sum()
     tot_pnl = tot_val - tot_inv
-    c1.metric("💰 Valore Attuale", f"€ {tot_val:,.2f}")
-    c2.metric("💳 Investito", f"€ {tot_inv:,.2f}")
-    c3.metric("📈 Profitto Netto", f"€ {tot_pnl:,.2f}", delta=f"{(tot_pnl/tot_inv)*100:.2f}%" if tot_inv else "0%")
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("💰 Valore Totale", f"€ {tot_val:,.2f}")
+    c2.metric("💳 Capitale Investito", f"€ {tot_inv:,.2f}")
+    c3.metric("📈 P&L Netto", f"€ {tot_pnl:,.2f}", delta=f"{(tot_pnl/tot_inv)*100:.2f}%" if tot_inv else "0%")
     
     st.divider()
+
+    # --- NUOVI GRAFICI DI ALLOCAZIONE ---
+    st.subheader("📊 Composizione Portafoglio")
     
-    # GRAFICO STORICO
-    st.subheader("📊 Andamento: Crescita vs Spesa")
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        # 1. Grafico a Torta (Allocazione Asset)
+        fig_pie = px.pie(view, values='mkt_val', names='product', title='Allocazione per Asset', hole=0.4)
+        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_pie, use_container_width=True)
+        
+    with col_chart2:
+        # 2. Treemap (Dimensione = Valore, Colore = Performance)
+        # Questo grafico è potentissimo: vedi subito chi sta guadagnando (Verde) e chi perdendo (Rosso)
+        fig_tree = px.treemap(view, path=['product'], values='mkt_val',
+                              color='pnl%', 
+                              color_continuous_scale='RdYlGn', # Rosso -> Giallo -> Verde
+                              color_continuous_midpoint=0,
+                              title='Mappa Valore e Performance')
+        fig_tree.update_layout(margin=dict(t=50, l=25, r=25, b=25))
+        st.plotly_chart(fig_tree, use_container_width=True)
+
+    st.divider()
+    
+    # --- GRAFICO STORICO DOPPIO ---
+    st.subheader("📉 Andamento Temporale")
     pivot = df_prices.pivot(index='date', columns='ticker', values='close_price').sort_index().ffill()
     pivot.index = pd.to_datetime(pivot.index)
     start_dt = df_trans['date'].min()
@@ -274,63 +297,58 @@ def render_dashboard(df_trans, df_map, df_prices):
     fig.update_layout(hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- TABELLA CLICCABILE ---
-    st.subheader("📋 Dettaglio Asset (Clicca per la storia)")
+    # --- TABELLA INTERATTIVA ---
+    st.subheader("📋 I Tuoi Asset (Clicca sulla riga per dettagli)")
     
-    # Prepariamo la tabella per la visualizzazione
+    # Prepariamo la tabella
     display_df = view[['product', 'ticker', 'quantity', 'net_invested', 'mkt_val', 'pnl%']].copy()
     display_df = display_df.sort_values('mkt_val', ascending=False)
     
-    # Styler per colori
-    styler = display_df.style.format({
-        'quantity': "{:.2f}", 'net_invested': "€ {:.2f}", 
-        'mkt_val': "€ {:.2f}", 'pnl%': "{:.2f}%"
-    }).applymap(color_pnl, subset=['pnl%'])
-
-    # Evento Selezione
+    # Renderizziamo la tabella con selezione attiva
     selection = st.dataframe(
-        display_df,
+        display_df.style.format({
+            'quantity': "{:.2f}", 'net_invested': "€ {:.2f}", 
+            'mkt_val': "€ {:.2f}", 'pnl%': "{:.2f}%"
+        }).applymap(color_pnl, subset=['pnl%']),
         use_container_width=True,
         column_config={
             "product": "Nome ETF",
             "ticker": "Simbolo",
             "quantity": "Quote",
             "net_invested": "Investito",
-            "mkt_val": "Valore",
+            "mkt_val": "Valore Oggi",
             "pnl%": "P&L"
         },
-        selection_mode="single-row",
-        on_select="rerun",
+        selection_mode="single-row", # Clicca una riga sola
+        on_select="rerun", # Ricarica per processare il click
         hide_index=True
     )
 
-    # Se l'utente clicca una riga
+    # SE L'UTENTE CLICCA UNA RIGA -> VAI AL DETTAGLIO
     if selection.selection.rows:
         idx = selection.selection.rows[0]
-        selected_ticker = display_df.iloc[idx]['ticker']
-        selected_product = display_df.iloc[idx]['product']
-        go_to_detail(selected_ticker, selected_product)
+        # Recupera i dati reali dal dataframe originale (non quello formattato)
+        # Nota: display_df potrebbe essere ordinato diversamente dall'indice visuale
+        selected_row = display_df.iloc[idx]
+        go_to_detail(selected_row['ticker'], selected_row['product'])
 
 
 # ==========================================
-#               VISTA: DETTAGLIO ETF
+#               VISTA: DETTAGLIO
 # ==========================================
 def render_detail(df_full, df_prices):
-    # Pulsante Indietro
     if st.button("⬅️ Torna alla Dashboard"):
         go_home()
 
     ticker = st.session_state.selected_ticker
     product = st.session_state.selected_product
     
-    st.title(f"🔎 Analisi: {product}")
+    st.title(f"🔎 {product}")
     st.caption(f"Ticker: {ticker}")
 
-    # Filtra dati specifici
     df_asset = df_full[df_full['ticker'] == ticker]
     asset_prices = df_prices[df_prices['ticker'] == ticker].sort_values('date')
 
-    # Dati Attuali
     qty = df_asset['quantity'].sum()
     invested = -df_asset['local_value'].sum()
     
@@ -341,7 +359,6 @@ def render_detail(df_full, df_prices):
     curr_val = qty * last_price
     pnl = curr_val - invested
 
-    # KPI Asset
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Quantità", f"{qty:.2f}")
     c2.metric("Prezzo Oggi", f"€ {last_price:.2f}")
@@ -350,16 +367,14 @@ def render_detail(df_full, df_prices):
 
     st.divider()
 
-    # Grafico Prezzo Storico
     if not asset_prices.empty:
-        st.subheader("Andamento Prezzo (Storico)")
+        st.subheader("Andamento Prezzo")
         fig = px.line(asset_prices, x='date', y='close_price')
         fig.update_traces(line_color='#00CC96')
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("Nessun dato di prezzo storico trovato.")
+        st.warning("Nessun dato storico trovato.")
 
-    # Tabella Transazioni
     st.subheader("Storico Transazioni")
     st.dataframe(
         df_asset[['date', 'product', 'quantity', 'local_value', 'fees']]
@@ -373,20 +388,20 @@ def render_detail(df_full, df_prices):
     )
 
 # ==========================================
-#               ROUTER PRINCIPALE
+#               ROUTER
 # ==========================================
 def main():
-    # Caricamento Dati Unico
+    # Caricamento unico per velocità
     with st.spinner("Caricamento..."):
         df_trans = get_data("transactions")
         df_map = get_data("mapping")
         df_prices = get_data("prices")
 
-    # Routing delle pagine
+    # Routing
     if st.session_state.page == 'home':
         render_dashboard(df_trans, df_map, df_prices)
     elif st.session_state.page == 'detail':
-        # Prepara df_full anche per il dettaglio
+        # Prepara df_full per il dettaglio
         if not df_trans.empty and not df_map.empty:
             df_trans['date'] = pd.to_datetime(df_trans['date'], errors='coerce').dt.normalize()
             df_trans = df_trans.dropna(subset=['date'])
@@ -395,7 +410,7 @@ def main():
             df_full = df_trans.merge(df_map, on='isin', how='left')
             render_detail(df_full, df_prices)
         else:
-            go_home() # Se non ci sono dati, torna a casa
+            go_home()
 
 if __name__ == "__main__":
     main()
