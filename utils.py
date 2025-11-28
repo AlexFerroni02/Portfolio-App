@@ -20,6 +20,8 @@ def get_google_sheet_client():
         st.error(f"Errore Secrets: {e}")
         return None
 
+# --- CACHING (TTL 10 min) ---
+@st.cache_data(ttl=600)
 def get_data(sheet_name):
     client = get_google_sheet_client()
     if not client: return pd.DataFrame()
@@ -30,6 +32,7 @@ def get_data(sheet_name):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
+# --- SALVATAGGIO E PULIZIA CACHE ---
 def save_data(df, sheet_name):
     client = get_google_sheet_client()
     if not client: return
@@ -41,6 +44,11 @@ def save_data(df, sheet_name):
         if not df.empty:
             df_str = df.astype(str)
             wks.update([df_str.columns.values.tolist()] + df_str.values.tolist())
+        
+        # *** PUNTO CRUCIALE: SVUOTA LA CACHE ***
+        # Questo costringe Streamlit a riscaricare i dati freschi alla prossima chiamata
+        get_data.clear()
+        
     except Exception as e: st.error(f"Errore salvataggio {sheet_name}: {e}")
 
 # --- PARSING & LOGICA ---
@@ -63,7 +71,9 @@ def generate_id(row, index):
 
 def sync_prices(tickers):
     if not tickers: return 0
+    # Qui chiamiamo get_data, che potrebbe essere cachato, ma va bene per leggere lo stato attuale
     df_prices = get_data("prices")
+    
     if not df_prices.empty:
         df_prices['date'] = pd.to_datetime(df_prices['date'], errors='coerce').dt.normalize()
         df_prices = df_prices.dropna(subset=['date'])
@@ -97,6 +107,8 @@ def sync_prices(tickers):
         df_new = pd.DataFrame(new_data)
         df_new['date'] = pd.to_datetime(df_new['date'])
         df_fin = pd.concat([df_prices, df_new], ignore_index=True).drop_duplicates(subset=['ticker', 'date'])
+        
+        # Salvando i dati, save_data chiamerà get_data.clear()
         save_data(df_fin, "prices")
         return len(new_data)
     return 0
@@ -109,7 +121,6 @@ def color_pnl(val):
         return f'background-color: {color}; color: {text_color}'
     except: return ''
 
-# --- FUNZIONE PER IL MENU ---
 def make_sidebar():
     with st.sidebar:
         st.header("Navigazione")

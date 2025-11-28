@@ -6,12 +6,8 @@ from datetime import datetime
 from utils import get_data, save_data, color_pnl, make_sidebar
 
 # --- CONFIGURAZIONE PAGINA ---
-# Deve essere la prima istruzione Streamlit
 st.set_page_config(page_title="Portfolio Pro", layout="wide", page_icon="🚀")
-
-# Genera il menu laterale personalizzato (Dashboard / Gestione Dati)
 make_sidebar()
-
 st.title("🚀 Dashboard Portafoglio")
 
 # --- CARICAMENTO DATI ---
@@ -20,45 +16,33 @@ with st.spinner("Caricamento dati..."):
     df_map = get_data("mapping")
     df_prices = get_data("prices")
 
-# Se non ci sono transazioni, mostra messaggio di benvenuto
 if df_trans.empty:
     st.info("👋 Benvenuto! Il database è vuoto. Vai su 'Gestione Dati' nel menu a sinistra per importare il CSV.")
     st.stop()
 
-# --- CONTROLLO MAPPATURA MANCANTE (AUTO-DETECT) ---
-# Verifica se ci sono ISIN nelle transazioni che non hanno un Ticker nella tabella mapping
+# --- CONTROLLO MAPPATURA MANCANTE (Auto-Detect) ---
 all_isins = df_trans['isin'].unique()
 mapped_isins = df_map['isin'].unique() if not df_map.empty else []
 missing_isins = [i for i in all_isins if i not in mapped_isins]
 
 if missing_isins:
     st.warning(f"⚠️ Ci sono {len(missing_isins)} nuovi asset senza Ticker Yahoo!")
-    st.write("Per vedere i prezzi e i grafici, devi associare un codice Yahoo Finance (es. `SWDA.MI` o `AAPL`) a questi ISIN.")
-    
     with st.form("quick_mapping_form"):
         new_mappings = []
         for isin in missing_isins:
-            # Recupera il nome del prodotto dalla prima transazione disponibile
             prod_name = df_trans[df_trans['isin'] == isin]['product'].iloc[0]
-            st.write(f"**{prod_name}**")
-            st.caption(f"ISIN: {isin}")
-            ticker_input = st.text_input(f"Ticker Yahoo", key=isin, placeholder="es. SWDA.MI")
+            st.write(f"**{prod_name}** ({isin})")
+            ticker_input = st.text_input(f"Ticker", key=isin, placeholder="es. SWDA.MI")
             if ticker_input:
                 new_mappings.append({'isin': isin, 'ticker': ticker_input.strip()})
             st.divider()
-        
         if st.form_submit_button("💾 Salva e Aggiorna"):
             if new_mappings:
                 new_df = pd.DataFrame(new_mappings)
-                # Unisce i nuovi mapping a quelli esistenti
                 df_final = pd.concat([df_map, new_df], ignore_index=True).drop_duplicates(subset=['isin'], keep='last')
                 save_data(df_final, "mapping")
-                st.success("Mappatura salvata! Ricarico la pagina...")
+                st.success("Salvato! Ricarico...")
                 st.rerun()
-            else:
-                st.error("Inserisci almeno un ticker per procedere.")
-    
-    # Blocca l'esecuzione qui finché non sono mappati tutti (o almeno finché l'utente non salva)
     st.stop() 
 
 # --- PREPARAZIONE DATI ---
@@ -68,15 +52,14 @@ df_prices['date'] = pd.to_datetime(df_prices['date'], errors='coerce').dt.normal
 # Unisce transazioni e mapping
 df_full = df_trans.merge(df_map, on='isin', how='left')
 
-# Recupera l'ultimo prezzo disponibile per ogni ticker
+# Recupera l'ultimo prezzo disponibile
 last_p = df_prices.sort_values('date').groupby('ticker').tail(1).set_index('ticker')['close_price']
 
-# Calcolo View aggregata per Asset
+# Calcolo View aggregata
 view = df_full.groupby(['product', 'ticker']).agg({'quantity':'sum', 'local_value':'sum'}).reset_index()
-view = view[view['quantity'] > 0.001] # Rimuovi posizioni chiuse (quantità ~ 0)
+view = view[view['quantity'] > 0.001] 
 
-# Calcolo metriche finanziarie
-view['net_invested'] = -view['local_value'] # local_value è negativo quando compri, quindi invertiamo il segno
+view['net_invested'] = -view['local_value']
 view['curr_price'] = view['ticker'].map(last_p)
 view['mkt_val'] = view['quantity'] * view['curr_price']
 view['pnl'] = view['mkt_val'] - view['net_invested']
@@ -96,13 +79,12 @@ st.divider()
 
 # --- GRAFICI (Torta + Treemap) ---
 col1, col2 = st.columns(2)
-
 with col1:
     if not view.empty:
         fig_pie = px.pie(view, values='mkt_val', names='product', title='Allocazione Asset', hole=0.4)
-        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+        # MODIFICA: textinfo='percent' mostra solo la % dentro la fetta
+        fig_pie.update_traces(textposition='inside', textinfo='percent')
         st.plotly_chart(fig_pie, use_container_width=True)
-
 with col2:
     if not view.empty:
         fig_tree = px.treemap(view, path=['product'], values='mkt_val', color='pnl%',
@@ -110,49 +92,43 @@ with col2:
                               title='Mappa Performance')
         st.plotly_chart(fig_tree, use_container_width=True)
 
-# --- GRAFICO STORICO (Valore vs Costo) ---
+# --- GRAFICO STORICO (OTTIMIZZATO - VETTORIALE) ---
 st.subheader("📉 Andamento Temporale")
-if not df_prices.empty:
-    # Crea una tabella pivot dei prezzi (Date x Ticker)
-    pivot = df_prices.pivot(index='date', columns='ticker', values='close_price').sort_index().ffill()
-    
+if not df_prices.empty and not df_full.empty:
+    # 1. Crea timeline completa
     start_dt = df_trans['date'].min()
-    rng = pd.date_range(start_dt, datetime.today(), freq='D').normalize()
-    
-    hist_data = []
-    curr_qty = {}
-    cum_inv = 0
-    trans_g = df_full.groupby('date')
-    
-    # Calcola valore giorno per giorno
-    for d in rng:
-        # Aggiorna quantità e investito se ci sono transazioni in quel giorno
-        if d in trans_g.groups:
-            dm = trans_g.get_group(d)
-            for _, r in dm.iterrows():
-                tk = r['ticker']
-                if pd.notna(tk): curr_qty[tk] = curr_qty.get(tk, 0) + r['quantity']
-                cum_inv += (-r['local_value'])
-        
-        # Calcola valore di mercato corrente
-        day_val = 0
-        for tk, q in curr_qty.items():
-            if q > 0.001 and tk in pivot.columns:
-                try:
-                    # Trova il prezzo più recente rispetto alla data d
-                    idx = pivot.index.asof(d)
-                    if pd.notna(idx): day_val += q * pivot.at[idx, tk]
-                except: pass
-        hist_data.append({'Data': d, 'Valore': day_val, 'Investito': cum_inv})
-    
-    hdf = pd.DataFrame(hist_data)
-    
+    end_dt = datetime.today()
+    full_idx = pd.date_range(start_dt, end_dt, freq='D').normalize()
+
+    # 2. Calcola quantità giornaliere (Pivot + Cumsum)
+    daily_qty_change = df_full.pivot_table(index='date', columns='ticker', values='quantity', aggfunc='sum').fillna(0)
+    daily_holdings = daily_qty_change.reindex(full_idx, fill_value=0).cumsum()
+
+    # 3. Prepara i prezzi (Pivot + Ffill)
+    price_matrix = df_prices.pivot(index='date', columns='ticker', values='close_price')
+    price_matrix = price_matrix.reindex(full_idx).ffill() 
+
+    # 4. Calcola Valore (Moltiplicazione matriciale: Holdings * Prices)
+    common_cols = daily_holdings.columns.intersection(price_matrix.columns)
+    daily_value = (daily_holdings[common_cols] * price_matrix[common_cols]).sum(axis=1)
+
+    # 5. Calcola Investito (Cumulativo)
+    daily_inv_change = df_full.pivot_table(index='date', values='local_value', aggfunc='sum').fillna(0)
+    daily_invested = -daily_inv_change.reindex(full_idx, fill_value=0).cumsum()
+
+    # 6. Crea DataFrame finale per il grafico
+    hdf = pd.DataFrame({
+        'Data': full_idx,
+        'Valore': daily_value,
+        'Investito': daily_invested['local_value']
+    })
+
     fig_hist = go.Figure()
     fig_hist.add_trace(go.Scatter(x=hdf['Data'], y=hdf['Valore'], fill='tozeroy', name='Valore Attuale', line_color='#00CC96'))
     fig_hist.add_trace(go.Scatter(x=hdf['Data'], y=hdf['Investito'], name='Soldi Versati', line=dict(color='#EF553B', dash='dash')))
     st.plotly_chart(fig_hist, use_container_width=True)
 else:
-    st.info("Nessun dato storico prezzi disponibile. Vai su 'Gestione Dati' e clicca 'Aggiorna Prezzi'.")
+    st.info("Dati insufficienti per il grafico storico.")
 
 # --- TABELLA INTERATTIVA ---
 st.subheader("📋 Dettaglio Asset (Clicca per Analisi)")
@@ -168,10 +144,8 @@ selection = st.dataframe(
     hide_index=True
 )
 
-# --- LOGICA DI NAVIGAZIONE ---
 if selection.selection.rows:
     idx = selection.selection.rows[0]
     sel_ticker = display_df.iloc[idx]['ticker']
-    # Salviamo in session state e cambiamo pagina
     st.session_state['selected_ticker'] = sel_ticker
     st.switch_page("pages/1_Analisi_Asset.py")
