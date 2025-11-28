@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 from utils import load_and_clean_data
 
-st.set_page_config(page_title="Analisi Asset", layout="wide", page_icon="🔎")
+
 st.title("🔎 Dettaglio ETF")
 
 df_trans, df_map, df_prices, df_full = load_and_clean_data()

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from utils import parse_degiro_csv, generate_id, get_data, save_data, sync_prices
 
-st.set_page_config(page_title="Gestione Dati", page_icon="📂")
+
 st.title("📂 Gestione Database")
 
 df_trans = get_data("transactions")
