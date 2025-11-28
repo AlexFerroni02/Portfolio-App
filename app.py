@@ -16,11 +16,16 @@ with st.sidebar:
     st.header("Navigazione")
     # Link alla Home (questo file)
     #st.page_link("app.py", label="Home", icon="🏠")
-    
-    # Link alle altre pagine (assicurati che i nomi dei file siano esatti)
-    st.page_link("pages/1_Analisi_Asset.py", label="Analisi Asset", icon="🔎")
-    st.page_link("pages/2_Gestione_Dati.py", label="Gestione Dati", icon="📂")
-    
+    pages = [
+        ("pages/1_Analisi_Asset.py", "Analisi Asset", "🔎"),
+        ("pages/2_Gestione_Dati.py", "Gestione Dati", "📂"),
+    ]
+    for page, label, icon in pages:
+        try:
+            st.page_link(page, label=label, icon=icon)
+        except Exception:
+            # fallback non bloccante: evita il KeyError in ambienti dove page_data non è disponibile
+            st.markdown(f"[{icon} {label}](?page={page})")
     st.divider()
     st.success("Menu Caricato")
 # 1. Caricamento Dati
