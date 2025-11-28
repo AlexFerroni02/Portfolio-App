@@ -125,7 +125,7 @@ def sync_prices(tickers):
         return len(new_data)
     return 0
 
-# --- INTERFACCIA UTENTE ---
+# --- INTERFACCIA UTENTE (Senza dizionario, gestione manuale) ---
 def main():
     st.title("🌐 Il Mio Portafoglio Cloud")
     
@@ -154,7 +154,7 @@ def main():
                         'product': r['Prodotto'],
                         'isin': r['ISIN'],
                         'quantity': r['Quantità'],
-                        'local_value': r['Valore'], # Negativo per acquisti
+                        'local_value': r['Valore'],
                         'fees': r['Costi di transazione'],
                         'currency': 'EUR'
                     })
@@ -170,63 +170,44 @@ def main():
             else:
                 st.info("Nessuna nuova transazione.")
 
-    # --- SETUP TICKER MANCANTI ---
-    if not df_trans.empty:
-        isins = df_trans['isin'].unique()
-        mapped = df_map['isin'].unique() if not df_map.empty else []
-        missing = [i for i in isins if i not in mapped]
-        
-        if missing:
-            st.warning("⚠️ Alcuni ETF non hanno il Ticker Yahoo!")
-            with st.form("ticker_fix"):
-                new_maps = []
-                for m in missing:
-                    prod_name = df_trans[df_trans['isin']==m]['product'].iloc[0]
-                    val = st.text_input(f"Ticker per: {prod_name} ({m})", placeholder="es. SWDA.MI")
-                    if val:
-                        new_maps.append({'isin': m, 'ticker': val.strip()})
-                
-                if st.form_submit_button("Salva Ticker"):
-                    if new_maps:
-                        df_m = pd.DataFrame(new_maps)
-                        df_fin = pd.concat([df_map, df_m], ignore_index=True)
-                        save_data(df_fin, "mapping")
-                        st.rerun()
-
     # --- SYNC PREZZI ---
+    # Qui legge solo dal tuo file mapping manuale
     if not df_map.empty:
         col1, col2 = st.columns([1,3])
         if col1.button("🔄 Aggiorna Prezzi"):
             tks = df_map['ticker'].unique().tolist()
-            n = sync_prices(tks)
+            with st.spinner("Scaricamento dati da Yahoo..."):
+                n = sync_prices(tks)
             if n > 0: st.success(f"Scaricati {n} nuovi prezzi!")
             else: st.info("Prezzi già aggiornati.")
 
     # --- DASHBOARD ---
     df_prices = get_data("prices")
     
+    # --- CORREZIONE ERRORE DATE ---
+    if not df_prices.empty:
+        # Questa è la modifica fondamentale: 'coerce' ignora gli errori
+        df_prices['date'] = pd.to_datetime(df_prices['date'], errors='coerce')
+        df_prices = df_prices.dropna(subset=['date'])
+
     if not df_trans.empty and not df_map.empty and not df_prices.empty:
         # Prepara Merge
         df_full = df_trans.merge(df_map, on='isin', how='left')
         
-        # Ultimo Prezzo
-        df_prices['date'] = pd.to_datetime(df_prices['date'])
         last_prices = df_prices.sort_values('date').groupby('ticker').tail(1).set_index('ticker')['close_price']
         
-        # Calcoli Portafoglio
         view = df_full.groupby(['product', 'ticker']).agg({
             'quantity': 'sum',
-            'local_value': 'sum' # Somma dei costi (negativi)
+            'local_value': 'sum'
         }).reset_index()
         
-        view = view[view['quantity'] > 0.001] # Solo aperti
+        view = view[view['quantity'] > 0.001]
         view['net_invested'] = -view['local_value']
         view['current_price'] = view['ticker'].map(last_prices)
         view['market_value'] = view['quantity'] * view['current_price']
         view['pnl'] = view['market_value'] - view['net_invested']
         view['pnl_perc'] = (view['pnl'] / view['net_invested']) * 100
         
-        # KPI
         tot_mkt = view['market_value'].sum()
         tot_inv = view['net_invested'].sum()
         delta_val = tot_mkt - tot_inv
@@ -239,9 +220,7 @@ def main():
         
         st.divider()
         
-        # Grafico Storico
         st.subheader("Andamento Temporale")
-        # Ricostruzione semplice dello storico (valore x prezzo)
         df_trans['date'] = pd.to_datetime(df_trans['date'])
         pivot_p = df_prices.pivot(index='date', columns='ticker', values='close_price').ffill()
         
@@ -249,25 +228,19 @@ def main():
         rng = pd.date_range(start, datetime.today(), freq='D')
         
         history = []
-        # Dizionario cumulativo quantità
         curr_q = {}
-        
-        # Ottimizzazione loop
         trans_g = df_full.groupby('date')
         
         for d in rng:
-            # Aggiorna qta se ci sono transazioni oggi
             if d in trans_g.groups:
                 for _, t in trans_g.get_group(d).iterrows():
                     tk = t['ticker']
                     if pd.notna(tk):
                         curr_q[tk] = curr_q.get(tk, 0) + t['quantity']
             
-            # Calcola valore
             val_day = 0
             for tk, q in curr_q.items():
                 if q > 0 and tk in pivot_p.columns:
-                    # Prendi prezzo al giorno d (o precedente)
                     idx = pivot_p.index.asof(d)
                     if pd.notna(idx):
                         p = pivot_p.at[idx, tk]
@@ -276,10 +249,8 @@ def main():
             history.append({'Data': d, 'Valore': val_day})
             
         st.plotly_chart(px.line(pd.DataFrame(history), x='Data', y='Valore'), use_container_width=True)
-        
-        # Tabella
         st.subheader("Dettaglio Asset")
         st.dataframe(view[['product', 'quantity', 'net_invested', 'market_value', 'pnl_perc']].style.format("{:.2f}"))
-
+        
 if __name__ == "__main__":
     main()
