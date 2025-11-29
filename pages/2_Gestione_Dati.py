@@ -76,10 +76,72 @@ with tab3:
 # --- TAB 4: MOVIMENTI BILANCIO (BATCH MODE) ---
 with tab4:
     st.header("➕ Aggiungi Entrate o Uscite")
-    st.caption("Inserisci più movimenti e poi premi 'Salva Tutto su Cloud' per inviarli in una volta sola.")
     
     CATEGORIE_ENTRATE = ["Stipendio", "Bonus", "Regali", "Dividendi", "Rimborso", "Altro"]
     CATEGORIE_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro"]
+    
+    # --- 0. SMART STIPENDIO (Rilevamento) ---
+    # Carichiamo i dati per controllare
+    df_budget = get_data("budget")
+    if not df_budget.empty:
+        df_budget['date'] = pd.to_datetime(df_budget['date'], errors='coerce').dt.normalize()
+
+    current_month_str = datetime.now().strftime('%Y-%m')
+    salary_found = False
+
+    # 1. Controllo nel Cloud (Dati salvati)
+    if not df_budget.empty:
+        check_cloud = df_budget[
+            (df_budget['date'].dt.strftime('%Y-%m') == current_month_str) & 
+            (df_budget['category'].isin(['Stipendio', 'Busta Paga', 'Salario']))
+        ]
+        if not check_cloud.empty:
+            salary_found = True
+
+    # 2. Controllo nella Coda (Dati in attesa)
+    if not salary_found:
+        for item in st.session_state.pending_entries:
+            # Controlla se la data inizia con "YYYY-MM" corrente e la categoria è Stipendio
+            if item['date'].startswith(current_month_str) and item['category'] in ['Stipendio', 'Busta Paga', 'Salario']:
+                salary_found = True
+                break
+
+    # Se non trovato né in cloud né in coda, mostra il box rapido
+    if not salary_found:
+        st.info(f"📅 Non risulta lo stipendio per **{datetime.now().strftime('%B %Y')}**.")
+        
+        # Recupera ultimo stipendio per pre-compilare
+        last_salary = 1500.0
+        if not df_budget.empty:
+            last_sal_row = df_budget[df_budget['category'].isin(['Stipendio', 'Busta Paga'])].sort_values('date', ascending=False)
+            if not last_sal_row.empty:
+                last_salary = float(last_sal_row.iloc[0]['amount'])
+
+        with st.form("quick_salary_form"):
+            c_sal1, c_sal2, c_sal3 = st.columns([2, 2, 1])
+            with c_sal1:
+                cat_name = st.selectbox("Categoria", CATEGORIE_ENTRATE, index=0)
+            with c_sal2:
+                std_salary = st.number_input("Importo Netto", value=last_salary, step=50.0)
+            with c_sal3:
+                st.write("") 
+                st.write("") 
+                # Nota: Aggiunge alla CODA, non al cloud diretto
+                btn_add_sal = st.form_submit_button("⬇️ Aggiungi alla Coda")
+            
+            if btn_add_sal:
+                st.session_state.pending_entries.append({
+                    'date': date.today().strftime('%Y-%m-%d'),
+                    'type': 'Entrata',
+                    'category': cat_name,
+                    'amount': std_salary,
+                    'note': 'Stipendio (Inserimento Rapido)'
+                })
+                st.success("✅ Stipendio aggiunto alla coda! Ricordati di salvare.")
+                st.rerun()
+        st.divider()
+
+    st.caption("Inserisci più movimenti e poi premi 'Salva Tutto su Cloud' per inviarli in una volta sola.")
     
     # 1. FORM DI INSERIMENTO (SOLO LOCALE)
     col_type, _ = st.columns([1, 3])
@@ -132,8 +194,6 @@ with tab4:
                 "category": "Categoria",
                 "note": "Note"
             },
-            # Blocchiamo le altre colonne per evitare modifiche accidentali mentre si cancella
-            # Se vuoi poter modificare anche i dati, togli le colonne da questa lista
             disabled=["date", "type", "category", "amount", "note"],
             hide_index=True,
             use_container_width=True,
@@ -141,17 +201,13 @@ with tab4:
         )
 
         # --- LOGICA DI ELIMINAZIONE ---
-        # Controlliamo se ci sono righe spuntate
         rows_to_delete = edited_pending[edited_pending["Elimina"] == True]
         
         if not rows_to_delete.empty:
             st.warning(f"Vuoi rimuovere {len(rows_to_delete)} righe dalla coda?")
             if st.button("🗑️ Rimuovi Selezionati dalla Coda"):
-                # Filtriamo tenendo solo quelle NON spuntate
                 df_kept = edited_pending[edited_pending["Elimina"] == False]
-                # Rimuoviamo la colonna "Elimina" prima di salvare nello stato
                 df_kept = df_kept.drop(columns=["Elimina"])
-                # Aggiorniamo lo stato
                 st.session_state.pending_entries = df_kept.to_dict('records')
                 st.rerun()
 
@@ -161,14 +217,13 @@ with tab4:
         col_save, col_clear = st.columns([1, 4])
         
         with col_save:
-            # Il pulsante di salvataggio appare solo se non stai cercando di cancellare cose
             if rows_to_delete.empty:
                 if st.button("☁️ SALVA TUTTO SU CLOUD", type="primary"):
                     with st.spinner("Salvataggio in corso su Google Sheets..."):
                         # 1. Carica dati attuali dal cloud
                         df_budget = get_data("budget")
                         
-                        # 2. Prepara i nuovi dati (togliendo la colonna Elimina se presente)
+                        # 2. Prepara i nuovi dati
                         df_new = edited_pending.drop(columns=["Elimina"], errors='ignore')
                         
                         # 3. Unisci
