@@ -82,14 +82,32 @@ col1, col2 = st.columns(2)
 with col1:
     if not view.empty:
         fig_pie = px.pie(view, values='mkt_val', names='product', title='Allocazione Asset', hole=0.4)
-        # MODIFICA: textinfo='percent' mostra solo la % dentro la fetta
-        fig_pie.update_traces(textposition='inside', textinfo='percent')
+        # MODIFICA: Mostra solo la percentuale dentro le fette
+        fig_pie.update_traces(textposition='inside', textinfo='percent', textfont_size=12)
+        # Legenda orizzontale sotto il grafico
+        fig_pie.update_layout(
+            height=400, # Aumentiamo un po' l'altezza per far spazio alla legenda
+            title_font_size=18,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.2, # Sposta la legenda sotto
+                xanchor="center",
+                x=0.5
+            ),
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
         st.plotly_chart(fig_pie, use_container_width=True)
 with col2:
     if not view.empty:
         fig_tree = px.treemap(view, path=['product'], values='mkt_val', color='pnl%',
                               color_continuous_scale='RdYlGn', color_continuous_midpoint=0,
                               title='Mappa Performance')
+        fig_tree.update_layout(
+            height=400,
+            title_font_size=18,
+            margin=dict(l=20, r=20, t=40, b=40) # Aumentato margine inferiore
+        )
         st.plotly_chart(fig_tree, use_container_width=True)
 
 # --- GRAFICO STORICO (OTTIMIZZATO - VETTORIALE) ---
@@ -126,6 +144,17 @@ if not df_prices.empty and not df_full.empty:
     fig_hist = go.Figure()
     fig_hist.add_trace(go.Scatter(x=hdf['Data'], y=hdf['Valore'], fill='tozeroy', name='Valore Attuale', line_color='#00CC96'))
     fig_hist.add_trace(go.Scatter(x=hdf['Data'], y=hdf['Investito'], name='Soldi Versati', line=dict(color='#EF553B', dash='dash')))
+    fig_hist.update_layout(
+        height=400,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(l=0, r=0, t=20, b=0) # Aggiunto margine superiore per la legenda
+    )
     st.plotly_chart(fig_hist, use_container_width=True)
 else:
     st.info("Dati insufficienti per il grafico storico.")
