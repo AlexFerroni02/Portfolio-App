@@ -100,12 +100,22 @@ def sync_prices(df_trans, df_map):
     return 0
 
 def color_pnl(val):
+    """
+    Applica colore verde se il valore è positivo, rosso se negativo.
+    Gestisce sia numeri puri (float/int) sia stringhe con '%'.
+    """
+    v = 0
     try:
-        v = float(str(val).strip('%'))
+        if isinstance(val, (int, float)):
+            v = val
+        else:
+            v = float(str(val).replace('%', '').strip())
+        
         color = '#d4edda' if v >= 0 else '#f8d7da'
         text_color = '#155724' if v >= 0 else '#721c24'
         return f'background-color: {color}; color: {text_color}'
-    except: return ''
+    except (ValueError, TypeError):
+        return ''
     
 def style_chart_for_mobile(fig):
     fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=10), hovermode="x unified", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
