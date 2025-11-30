@@ -70,6 +70,16 @@ view['mkt_val'] = view['quantity'] * view['curr_price']
 view['pnl'] = view['mkt_val'] - view['net_invested']
 view['pnl%'] = (view['pnl'] / view['net_invested']) * 100
 
+# --- KPI TOTALI (CALCOLATI SOLO SUGLI ASSET) ---
+tot_val_assets = view['mkt_val'].sum()
+tot_inv_assets = view['net_invested'].sum()
+tot_pnl_assets = tot_val_assets - tot_inv_assets
+c1, c2, c3 = st.columns(3)
+c1.metric("💰 Valore Totale Asset", f"€ {tot_val_assets:,.2f}")
+c2.metric("💳 Capitale Investito", f"€ {tot_inv_assets:,.2f}")
+c3.metric("📈 P&L Netto", f"€ {tot_pnl_assets:,.2f}", delta=f"{(tot_pnl_assets/tot_inv_assets)*100:.2f}%" if tot_inv_assets else "0%")
+st.divider()
+
 # --- LOGICA LIQUIDITA' A DUE MODALITA' (MANUALE/AUTOMATICA) ---
 final_liquidity = 0.0
 liquidity_label = "Liquidità"
@@ -107,16 +117,6 @@ if not manual_override and not df_budget.empty and not df_trans.empty:
 if final_liquidity > 0:
     liquidita_row = pd.DataFrame([{'product': liquidity_label, 'ticker': 'CASH', 'category': 'Liquidità', 'quantity': 1, 'local_value': 0, 'net_invested': final_liquidity, 'curr_price': final_liquidity, 'mkt_val': final_liquidity, 'pnl': 0, 'pnl%': 0}])
     view = pd.concat([view, liquidita_row], ignore_index=True)
-
-# --- KPI TOTALI ---
-tot_val = view['mkt_val'].sum()
-tot_inv = view['net_invested'].sum()
-tot_pnl = tot_val - tot_inv
-c1, c2, c3 = st.columns(3)
-c1.metric("💰 Valore Totale", f"€ {tot_val:,.2f}")
-c2.metric("💳 Capitale Investito", f"€ {tot_inv:,.2f}")
-c3.metric("📈 P&L Netto", f"€ {tot_pnl:,.2f}", delta=f"{(tot_pnl/tot_inv)*100:.2f}%" if tot_inv else "0%")
-st.divider()
 
 # --- SEZIONE COMPOSIZIONE PORTAFOGLIO CON TABS ---
 st.subheader("🔬 Analisi Composizione Portafoglio")

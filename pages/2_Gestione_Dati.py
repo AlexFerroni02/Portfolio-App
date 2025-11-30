@@ -71,34 +71,68 @@ with tab3:
         else:
             st.error("Database transazioni o mappatura vuoto. Impossibile aggiornare i prezzi.")
 
-# --- TAB 4: MOVIMENTI BILANCIO ---
+# --- TAB 4: MOVIMENTI BILANCIO (LAYOUT VERTICALE) ---
 with tab4:
-    st.header("➕ Aggiungi Entrate o Uscite")
+    st.header("➕ Inserimento Rapido Movimenti")
+    
     CATEGORIE_ENTRATE = ["Stipendio", "Bonus", "Regali", "Dividendi", "Rimborso", "Altro"]
     CATEGORIE_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro"]
-    col_type, _ = st.columns([1, 3])
-    f_type = col_type.radio("Tipo Movimento:", ["Uscita", "Entrata"], horizontal=True, key="budget_type")
-    lista_cat = CATEGORIE_ENTRATE if f_type == "Entrata" else CATEGORIE_USCITE
-    with st.form("budget_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        f_date = col1.date_input("Data", date.today())
-        f_cat = col2.selectbox("Categoria", lista_cat)
-        f_amount = col3.number_input("Importo (€)", min_value=0.0, step=10.0, format="%.2f")
-        f_note = st.text_input("Note (opzionale)")
-        if st.form_submit_button("💾 Salva Movimento", type="primary"):
-            if f_amount > 0:
-                new_entry = pd.DataFrame([{'date': pd.to_datetime(f_date), 'type': f_type, 'category': f_cat, 'amount': f_amount, 'note': f_note}])
-                save_data(new_entry, "budget", method='append')
-                st.success(f"✅ Salvato: {f_cat} - € {f_amount}")
-            else:
-                st.warning("Inserisci un importo maggiore di 0.")
+
+    col_date, col_type = st.columns(2)
+    selected_date = col_date.date_input("Data per i movimenti", date.today(), key="batch_date")
+    f_type = col_type.radio("Tipo Movimento:", ["Uscita", "Entrata"], horizontal=True, key="budget_type_radio")
+    
     st.divider()
+
+    with st.form("batch_form", clear_on_submit=True):
+        active_categories = CATEGORIE_USCITE if f_type == "Uscita" else CATEGORIE_ENTRATE
+        
+        if f_type == "Uscita":
+            st.subheader("🔴 Inserisci Uscite")
+        else:
+            st.subheader("🟢 Inserisci Entrate")
+
+        for cat in active_categories:
+            st.markdown(f"**{cat}**")
+            col_val, col_note = st.columns(2)
+            col_val.number_input("Importo", label_visibility="collapsed", key=f"movimento_{cat}", min_value=0.0, value=0.0, format="%.2f")
+            col_note.text_input("Note", label_visibility="collapsed", key=f"nota_{cat}", placeholder="Nota opzionale...")
+            st.divider()
+        
+        submitted = st.form_submit_button("💾 Salva Movimenti", type="primary", use_container_width=True)
+        
+        if submitted:
+            rows_to_add = []
+            for cat in active_categories:
+                amount = st.session_state[f"movimento_{cat}"]
+                note = st.session_state[f"nota_{cat}"]
+                if amount > 0:
+                    rows_to_add.append({
+                        'date': pd.to_datetime(selected_date),
+                        'type': f_type,
+                        'category': cat,
+                        'amount': amount,
+                        'note': note if note else ''
+                    })
+
+            if rows_to_add:
+                new_entries_df = pd.DataFrame(rows_to_add)
+                save_data(new_entries_df, "budget", method='append')
+                st.success(f"✅ Salvati {len(rows_to_add)} nuovi movimenti!")
+            else:
+                st.warning("Nessun importo inserito. Nessun movimento salvato.")
+
     st.subheader("Ultimi Movimenti Inseriti")
     df_budget_display = get_data("budget")
     if not df_budget_display.empty:
         df_budget_display['date'] = pd.to_datetime(df_budget_display['date'])
-        st.dataframe(df_budget_display.sort_values('date', ascending=False).head(10), use_container_width=True, hide_index=True,
-            column_config={"date": st.column_config.DateColumn("Data", format="DD-MM-YYYY"), "amount": st.column_config.NumberColumn("Importo", format="€ %.2f")})
+        cols_to_show = ['date', 'type', 'category', 'amount', 'note']
+        st.dataframe(df_budget_display[cols_to_show].sort_values('date', ascending=False).head(10), use_container_width=True, hide_index=True,
+            column_config={
+                "date": st.column_config.DateColumn("Data", format="DD-MM-YYYY"), 
+                "amount": st.column_config.NumberColumn("Importo", format="€ %.2f"),
+                "note": st.column_config.TextColumn("Note")
+            })
     else:
         st.info("Nessun movimento ancora registrato.")
 
