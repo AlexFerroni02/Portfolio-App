@@ -61,18 +61,31 @@ def generate_id(row, index):
     raw = f"{index}{d_str}{row.get('Ora','')}{row.get('ISIN','')}{row.get('Quantità','')}{row.get('Valore','')}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-def sync_prices(tickers):
-    if not tickers: return 0
-    
-    # Usiamo il metodo 'append' per efficienza
+def sync_prices(df_trans, df_map):
+    """
+    Scarica i prezzi mancanti SOLO per gli asset attualmente in portafoglio.
+    """
+    if df_trans.empty or df_map.empty:
+        return 0
+
+    # 1. Identifica i ticker attualmente posseduti (quantità > 0)
+    df_full = df_trans.merge(df_map, on='isin', how='left')
+    holdings = df_full.groupby('ticker')['quantity'].sum()
+    owned_tickers = holdings[holdings > 0.001].index.tolist()
+
+    if not owned_tickers:
+        st.info("Nessun asset attualmente in portafoglio da aggiornare.")
+        return 0
+
+    # 2. Prosegui con la logica di download esistente, ma solo per i ticker posseduti
     df_prices_all = get_data("prices")
     if not df_prices_all.empty:
         df_prices_all['date'] = pd.to_datetime(df_prices_all['date'], errors='coerce').dt.normalize()
         df_prices_all = df_prices_all.dropna(subset=['date'])
 
     new_data = []
-    bar = st.progress(0, text="Sincronizzazione prezzi...")
-    for i, t in enumerate(tickers):
+    bar = st.progress(0, text="Sincronizzazione prezzi per gli asset posseduti...")
+    for i, t in enumerate(owned_tickers):
         start_date = "2020-01-01"
         if not df_prices_all.empty:
             exist = df_prices_all[df_prices_all['ticker'] == t]
@@ -81,7 +94,7 @@ def sync_prices(tickers):
                 if pd.notna(last) and last.date() < (date.today() - timedelta(days=1)):
                     start_date = (last + timedelta(days=1)).strftime('%Y-%m-%d')
                 elif pd.notna(last):
-                    bar.progress((i + 1) / len(tickers), text=f"Prezzi per {t} già aggiornati.")
+                    bar.progress((i + 1) / len(owned_tickers), text=f"Prezzi per {t} già aggiornati.")
                     continue
         try:
             hist = yf.download(t, start=start_date, progress=False)
@@ -92,12 +105,11 @@ def sync_prices(tickers):
                         new_data.append({'ticker': t, 'date': d.strftime('%Y-%m-%d'), 'close_price': float(v)})
         except Exception:
             pass
-        bar.progress((i + 1) / len(tickers), text=f"Scaricati prezzi per {t}")
+        bar.progress((i + 1) / len(owned_tickers), text=f"Scaricati prezzi per {t}")
     bar.empty()
     
     if new_data:
         df_new = pd.DataFrame(new_data)
-        # Sovrascriviamo l'intera tabella dei prezzi per semplicità, dopo averla aggiornata
         df_combined = pd.concat([df_prices_all, df_new], ignore_index=True)
         df_combined = df_combined.drop_duplicates(subset=['ticker', 'date'], keep='last')
         save_data(df_combined, "prices", method='replace')

@@ -58,15 +58,20 @@ with tab2:
 
 # --- TAB 3: PREZZI ---
 with tab3:
-    st.write("Scarica gli ultimi prezzi di chiusura da Yahoo Finance.")
+    st.write("Scarica gli ultimi prezzi di chiusura da Yahoo Finance **solo per gli asset che possiedi**.")
     if st.button("Avvia Sincronizzazione Prezzi"):
+        df_trans = get_data("transactions")
         df_map = get_data("mapping")
-        if not df_map.empty:
-            tickers = df_map['ticker'].unique().tolist()
-            n = sync_prices(tickers)
-            st.success(f"✅ Aggiornamento completato: {n} nuovi prezzi salvati.")
+        
+        if not df_map.empty and not df_trans.empty:
+            # La nuova funzione sync_prices calcola da sola i ticker necessari
+            n = sync_prices(df_trans, df_map)
+            if n > 0:
+                st.success(f"✅ Aggiornamento completato: {n} nuovi prezzi salvati.")
+            else:
+                st.info("Tutti i prezzi per gli asset posseduti sono già aggiornati.")
         else:
-            st.error("Nessuna mappatura trovata. Configura prima i ticker.")
+            st.error("Database transazioni o mappatura vuoto. Impossibile aggiornare i prezzi.")
 
 # --- TAB 4: MOVIMENTI BILANCIO (SALVATAGGIO OTTIMIZZATO) ---
 with tab4:
