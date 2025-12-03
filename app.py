@@ -16,7 +16,6 @@ with st.spinner("Caricamento dati..."):
     df_trans = get_data("transactions")
     df_map = get_data("mapping")
     df_prices = get_data("prices")
-    df_settings = get_data("settings")
     df_budget = get_data("budget")
     df_alloc = get_data("asset_allocation")
 
@@ -72,22 +71,34 @@ c2.metric("💳 Capitale Versato", f"€ {tot_inv_assets:,.2f}")
 c3.metric("📈 P&L Netto", f"€ {tot_pnl_assets:,.2f}", delta=f"{(tot_pnl_assets/tot_inv_assets)*100:.2f}%" if tot_inv_assets else "0%")
 st.divider()
 
-final_liquidity, liquidity_label, manual_override = 0.0, "Liquidità", False
-if not df_settings.empty:
-    liquidity_setting = df_settings[df_settings['key'] == 'manual_liquidity']
-    if not liquidity_setting.empty:
-        manual_liquidity_value = float(liquidity_setting['value'].iloc[0])
-        if manual_liquidity_value > 0:
-            final_liquidity, liquidity_label, manual_override = manual_liquidity_value, "Liquidità Manuale", True
-if not manual_override and not df_budget.empty and not df_trans.empty:
-    start_date_budget = df_budget['date'].min()
-    budget_since_start = df_budget[df_budget['date'] >= start_date_budget]
-    trans_since_start = df_trans[df_trans['date'] >= start_date_budget]
-    total_entrate = budget_since_start[budget_since_start['type'] == 'Entrata']['amount'].sum()
-    total_uscite = budget_since_start[budget_since_start['type'] == 'Uscita']['amount'].sum()
-    total_investito_netto = -trans_since_start['local_value'].sum()
-    final_liquidity = total_entrate - total_uscite - total_investito_netto
+# CORRETTO: Logica di calcolo liquidità che rispetta Saldo Iniziale e Aggiustamenti
+final_liquidity, liquidity_label = 0.0, "Liquidità"
+if not df_budget.empty:
+    df_budget_sorted = df_budget.sort_values('date')
+    initial_balance_entry = df_budget_sorted[df_budget_sorted['category'] == 'Saldo Iniziale'].head(1)
+    
+    start_date = pd.Timestamp.min.tz_localize('UTC')
+    base_liquidity = 0.0
+
+    if not initial_balance_entry.empty:
+        start_date = initial_balance_entry['date'].iloc[0]
+        base_liquidity = initial_balance_entry['amount'].iloc[0]
+        
+        budget_to_sum = df_budget_sorted[df_budget_sorted['date'] > start_date]
+        trans_to_sum = df_trans[df_trans['date'] > start_date] if not df_trans.empty else pd.DataFrame()
+        
+        other_entrate = budget_to_sum[(budget_to_sum['type'] == 'Entrata') & (budget_to_sum['category'] != 'Saldo Iniziale')]['amount'].sum()
+        all_uscite = budget_to_sum[budget_to_sum['type'] == 'Uscita']['amount'].sum()
+        investments = -trans_to_sum['local_value'].sum() if not trans_to_sum.empty else 0.0
+        final_liquidity = base_liquidity + other_entrate - all_uscite - investments
+    else:
+        total_entrate = df_budget['amount'][df_budget['type'] == 'Entrata'].sum()
+        total_uscite = df_budget['amount'][df_budget['type'] == 'Uscita']['amount'].sum()
+        total_investito_netto = -df_trans['local_value'].sum() if not df_trans.empty else 0.0
+        final_liquidity = total_entrate - total_uscite - total_investito_netto
+    
     liquidity_label = "Liquidità Calcolata"
+
 if final_liquidity > 0:
     liquidita_row = pd.DataFrame([{'product': liquidity_label, 'ticker': 'CASH', 'category': 'Liquidità', 'quantity': 1, 'local_value': 0, 'net_invested': final_liquidity, 'curr_price': final_liquidity, 'mkt_val': final_liquidity, 'pnl': 0, 'pnl%': 0}])
     view = pd.concat([view, liquidita_row], ignore_index=True)
@@ -113,52 +124,24 @@ with tab2:
     st.plotly_chart(fig_simple, use_container_width=True)
 with tab3:
     if not view.empty:
-        # Colori fissi per categoria
         color_map = {'Azionario': '#3B82F6', 'Obbligazionario': '#EF4444', 'Gold': '#D4AF37', 'Liquidità': '#10B981', 'Altro': '#9CA3AF'}
-
-        # Prepara i dati: prendi solo le colonne rilevanti e normalizza category
         prod_df = view[['product', 'category', 'mkt_val']].copy()
         prod_df['category'] = prod_df['category'].fillna('Altro').astype(str)
-
-        # Mappa categorie sconosciute su 'Altro' così tutte hanno un colore noto
         prod_df['category'] = prod_df['category'].apply(lambda c: c if c in color_map else 'Altro')
-
-        # Ordine desiderato per raggruppare i segmenti (così categorie vicine)
         desired_order = ['Azionario', 'Obbligazionario', 'Gold', 'Liquidità', 'Altro']
         prod_df['category'] = pd.Categorical(prod_df['category'], categories=desired_order, ordered=True)
-
-        # Ordina per categoria (gruppa insieme) e poi per valore decrescente
         prod_df = prod_df.sort_values(['category', 'mkt_val'], ascending=[True, False]).reset_index(drop=True)
-
-        # Rimuovi righe con valore 0 per evitare slice 0% nel grafico
         plot_df = prod_df[prod_df['mkt_val'] > 0].copy()
-
         if plot_df.empty:
             st.info("Nessun asset con valore da mostrare.")
         else:
-            # Calcola percentuale e mostra etichetta solo se rilevante (evita etichette '0%')
             total = plot_df['mkt_val'].sum()
             plot_df = plot_df.copy()
             plot_df['pct'] = (plot_df['mkt_val'] / total) * 100
             plot_df['text'] = plot_df['pct'].apply(lambda x: f"{x:.1f}%" if x >= 0.5 else "")
-
-            # Crea il grafico - usa color sulla colonna category (mappa fissa)
-            fig_all_assets = px.pie(
-                plot_df,
-                values='mkt_val',
-                names='product',
-                title='Composizione per singolo Asset',
-                color='category',
-                color_discrete_map=color_map
-            )
+            fig_all_assets = px.pie(plot_df, values='mkt_val', names='product', title='Composizione per singolo Asset', color='category', color_discrete_map=color_map)
             fig_all_assets = style_chart_for_mobile(fig_all_assets)
-
-            # Usa le percentuali calcolate come testo (evita 0%)
-            fig_all_assets.update_traces(
-                text=plot_df['text'],
-                textinfo='text',
-                hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>'
-            )
+            fig_all_assets.update_traces(text=plot_df['text'], textinfo='text', hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
             fig_all_assets.update_layout(showlegend=False)
             st.plotly_chart(fig_all_assets, use_container_width=True)
     else:
@@ -246,7 +229,6 @@ else:
     st.info("Dati insufficienti per il grafico storico.")
 
 st.subheader("📋 Dettaglio Asset (Clicca per Analisi)")
-# La riga 'CASH' viene mostrata nella tabella
 display_df = view[['product', 'ticker', 'quantity', 'net_invested', 'mkt_val', 'pnl%']].sort_values('mkt_val', ascending=False)
 selection = st.dataframe(
     display_df.style.format({'quantity': "{:.2f}", 'net_invested': "€ {:.2f}", 'mkt_val': "€ {:.2f}", 'pnl%': "{:.2f}%"}).applymap(color_pnl, subset=['pnl%']),
@@ -255,7 +237,6 @@ selection = st.dataframe(
 if selection.selection.rows:
     idx = selection.selection.rows[0]
     sel_ticker = display_df.iloc[idx]['ticker']
-    # Impedisce il reindirizzamento se si clicca sulla riga della liquidità
     if sel_ticker != 'CASH':
         st.session_state['selected_ticker'] = sel_ticker
         st.switch_page("pages/1_Analisi_Asset.py")

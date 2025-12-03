@@ -7,3 +7,5 @@ sqlalchemy
 requests
 lxml
 beautifulsoup4
+groq
+scikit-learn

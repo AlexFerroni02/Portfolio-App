@@ -30,7 +30,9 @@ def save_data(df, table_name, method='replace'):
     try:
         conn = get_db_connection()
         df.to_sql(name=table_name, con=conn.engine, if_exists=method, index=False)
-        get_data.clear()
+        # Pulisce la cache di TUTTE le funzioni @st.cache_data.
+        # Questo è il metodo corretto per forzare un refresh dei dati in tutta l'app.
+        st.cache_data.clear()
     except Exception as e:
         st.error(f"Errore durante il salvataggio della tabella '{table_name}': {e}")
 
@@ -112,6 +114,7 @@ def make_sidebar():
         st.page_link("pages/2_Gestione_Dati.py", label="Gestione Dati", icon="📂")
         st.page_link("pages/3_Benchmark.py", label="Benchmark", icon="⚖️")
         st.page_link("pages/4_Bilancio.py", label="Bilancio", icon="💰")
+        st.page_link("pages/5_AI_analysis.py", label="AI Analyst", icon="🤖")
         st.divider()
         st.caption(f"Portfolio Pro v1.2\n© {datetime.now().year}")
 
