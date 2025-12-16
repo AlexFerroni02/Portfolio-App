@@ -2,30 +2,275 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pycountry
 import json
+from typing import Optional
 from ui.components import style_chart_for_mobile, color_pnl
+
+
+# ========== CONVERSIONE IT -> ISO3 (per mappa geografica) ==========
+
+COUNTRY_ALIASES_IT = {
+    # Nord America
+    "stati uniti": "United States",
+    "canada": "Canada",
+    "messico": "Mexico",
+    
+    # Europa
+    "regno unito": "United Kingdom",
+    "paesi bassi": "Netherlands",
+    "germania": "Germany",
+    "francia": "France",
+    "svizzera": "Switzerland",
+    "irlanda": "Ireland",
+    "belgio": "Belgium",
+    "italia": "Italy",
+    "spagna": "Spain",
+    "austria": "Austria",
+    "finlandia": "Finland",
+    "portogallo": "Portugal",
+    "grecia": "Greece",
+    "norvegia": "Norway",
+    "svezia": "Sweden",
+    "danimarca": "Denmark",
+    "polonia": "Poland",
+    
+    # Asia
+    "giappone": "Japan",
+    "cina": "China",
+    "india": "India",
+    "taiwan": "Taiwan",
+    "corea del sud": "Korea, Republic of",
+    "corea del nord": "Korea, Democratic People's Republic of",
+    "singapore": "Singapore",
+    "hong kong": "Hong Kong",
+    "indonesia": "Indonesia",
+    "malesia": "Malaysia",
+    "thailandia": "Thailand",
+    "vietnam": "Vietnam",
+    "filippine": "Philippines",
+    "emirati arabi uniti": "United Arab Emirates",
+    "arabia saudita": "Saudi Arabia",
+    "israele": "Israel",
+    "turchia": "Turkey",
+    
+    # Oceania
+    "australia": "Australia",
+    "nuova zelanda": "New Zealand",
+    
+    # Sud America
+    "brasile": "Brazil",
+    "argentina": "Argentina",
+    "cile": "Chile",
+    "colombia": "Colombia",
+    "perù": "Peru",
+    "venezuela": "Venezuela",
+    
+    # Africa
+    "sudafrica": "South Africa",
+    "sud africa": "South Africa",
+    "egitto": "Egypt",
+    "nigeria": "Nigeria",
+    "marocco": "Morocco",
+    
+    # Russia
+    "russia": "Russian Federation",
+}
+
+def _name_to_iso3(country_name: str) -> Optional[str]:
+    """
+    Converte nome paese (anche italiano) in ISO3.
+    Usa pycountry + alias minimi per i casi non riconosciuti.
+    """
+    if not country_name:
+        return None
+    
+    name = str(country_name).strip()
+    low = name.lower()
+    
+    # Escludi voci non-paese
+    if low in {"altri", "altro", "resto", "resto del mondo"}:
+        return None
+    
+    # 1) Prova alias IT -> EN
+    query = COUNTRY_ALIASES_IT.get(low, name)
+    
+    # 2) Prova pycountry (fuzzy search)
+    try:
+        result = pycountry.countries.search_fuzzy(query)
+        return result[0].alpha_3
+    except Exception:
+        return None
+
+
+def _render_geo_map_globe(geo_dict: dict):
+    """
+    Mappa geografica con Plotly ottimizzata UX.
+    geo_dict: {nome_paese_IT: valore_euro}
+    """
+    if not geo_dict:
+        return
+    
+    # ========== CALCOLA "ALTRI" PRIMA DI FILTRARE ==========
+    df_full = pd.DataFrame(list(geo_dict.items()), columns=["Paese_it", "Valore"])
+    df_full["key"] = df_full["Paese_it"].astype(str).str.strip().str.lower()
+    
+    # Totale ORIGINALE (con "Altri")
+    total_original = df_full["Valore"].sum()
+    
+    # Valore "Altri"
+    altri_mask = df_full["key"].isin({"altri", "altro", "resto", "resto del mondo"})
+    altri_value = df_full[altri_mask]["Valore"].sum()
+    altri_perc = (altri_value / total_original * 100) if total_original > 0 else 0
+    
+    # Dataset filtrato (senza "Altri")
+    df = df_full[~altri_mask].copy()
+    
+    # Conversione IT -> ISO3
+    df["iso3"] = df["Paese_it"].apply(_name_to_iso3)
+    df = df[df["iso3"].notna()].copy()
+    
+    if df.empty:
+        st.warning("Nessun paese riconosciuto per la mappa.")
+        return
+    
+    # ========== CALCOLA PERCENTUALI SUL TOTALE ORIGINALE (con "Altri") ==========
+    df["Percentuale"] = (df["Valore"] / total_original * 100) if total_original > 0 else 0
+    
+    # ========== TOGGLE MINIMALE + AVVISO "ALTRI" ==========
+    col_toggle, col_alert = st.columns([1, 4])
+    with col_toggle:
+        projection_choice = st.segmented_control(
+            label="Vista",
+            options=["🌐", "🗺️"],
+            default="🌐",
+            label_visibility="collapsed",
+            key="map_projection_toggle"
+        )
+    
+    with col_alert:
+        if altri_value > 0:
+            st.caption(
+                f"ℹ️ **{altri_perc:.1f}%** (€{altri_value:,.0f}) allocato in paesi non visualizzabili sulla mappa.",
+                help="Questa quota include paesi non riconosciuti o voci generiche ('Altri', 'Resto del mondo', ecc.)"
+            )
+    
+    # Mappa icone -> proiezioni
+    projection_map = {
+        "🌐": "orthographic",      # Globo 3D
+        "🗺️": "natural earth"      # Planisfero 2D
+    }
+    projection_type = projection_map.get(projection_choice, "orthographic")
+    
+    fig = px.choropleth(
+        df,
+        locations="iso3",
+        locationmode="ISO-3",
+        color="Valore",
+        hover_name="Paese_it",
+        color_continuous_scale=[
+            [0.0, "rgba(16, 185, 129, 0.2)"],   # verde chiaro
+            [0.3, "rgba(16, 185, 129, 0.5)"],
+            [0.6, "rgba(59, 130, 246, 0.7)"],   # blu
+            [1.0, "rgba(99, 102, 241, 1.0)"]    # indaco
+        ],
+        projection=projection_type,
+    )
+    
+    # ========== STILE GEO ==========
+    fig.update_geos(
+        showocean=True, 
+        oceancolor="#0E1117",
+        showlakes=True,
+        lakecolor="#0E1117",
+        showcountries=True,
+        countrycolor="rgba(255,255,255,0.08)",
+        showcoastlines=True,
+        coastlinecolor="rgba(255,255,255,0.15)",
+        showland=True,
+        landcolor="rgba(38, 39, 48, 0.4)",
+        projection_rotation=dict(lon=10, lat=30, roll=0) if projection_type == "orthographic" else None,
+        bgcolor="rgba(0,0,0,0)"
+    )
+    
+    # ========== LAYOUT ==========
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=480,
+        coloraxis_colorbar=dict(
+            title=dict(
+                text="Valore €",
+                font=dict(size=13, color="rgba(255,255,255,0.9)")
+            ),
+            tickformat=",.0f",
+            len=0.65,
+            thickness=14,
+            bgcolor="rgba(38, 39, 48, 0.8)",
+            bordercolor="rgba(255,255,255,0.1)",
+            borderwidth=1,
+            tickfont=dict(size=11, color="rgba(255,255,255,0.7)"),
+            x=1.02,
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        geo=dict(bgcolor="rgba(0,0,0,0)"),
+        font=dict(family="Inter, sans-serif", color="rgba(255,255,255,0.9)")
+    )
+    
+    # ========== TOOLTIP ==========
+    fig.update_traces(
+        hovertemplate=(
+            "<b style='font-size:14px'>%{hovertext}</b><br>"
+            "<span style='color:#10B981'>€%{z:,.0f}</span> "
+            "<span style='color:rgba(255,255,255,0.6)'>(%{customdata:.1f}%)</span>"
+            "<extra></extra>"
+        ),
+        customdata=df["Percentuale"],
+        marker_line_width=0.5,
+        marker_line_color="rgba(255,255,255,0.2)"
+    )
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
 
 def render_kpis(assets_view: pd.DataFrame):
     """Renderizza i KPI principali basandosi SOLO sugli asset."""
     tot_val_assets = assets_view['mkt_val'].sum()
     tot_inv_assets = assets_view['net_invested'].sum()
     tot_pnl_assets = tot_val_assets - tot_inv_assets
+    
     c1, c2, c3 = st.columns(3)
     c1.metric("💰 Valore Portafoglio Attuale", f"€ {tot_val_assets:,.2f}")
     c2.metric("💳 Capitale Versato (Asset)", f"€ {tot_inv_assets:,.2f}")
     c3.metric("📈 P&L Netto (Asset)", f"€ {tot_pnl_assets:,.2f}", delta=f"{(tot_pnl_assets/tot_inv_assets)*100:.2f}%" if tot_inv_assets else "0%")
     st.divider()
 
+
 def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
     """Renderizza i tab con i grafici di composizione (inclusa liquidità)."""
     st.subheader("🔬 Analisi Composizione Portafoglio")
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Asset Class", "Azioni/Obbligazioni/Gold", "Tutti gli Asset", "Dettaglio Azionario", "Dettaglio Obbligazionario", "🌍 Allocazione (X-Ray)"])
-    color_map = {'Azionario': '#3B82F6', 'Obbligazionario': '#EF4444', 'Gold': '#D4AF37', 'Liquidità': '#10B981', 'Altro': '#9CA3AF'}
+    
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Asset Class", 
+        "Azioni/Obbligazioni/Gold", 
+        "Tutti gli Asset", 
+        "Dettaglio Azionario", 
+        "Dettaglio Obbligazionario", 
+        "🌍 Allocazione (X-Ray)"
+    ])
+    
+    color_map = {
+        'Azionario': '#3B82F6', 
+        'Obbligazionario': '#EF4444', 
+        'Gold': '#D4AF37', 
+        'Liquidità': '#10B981', 
+        'Altro': '#9CA3AF'
+    }
     
     with tab1:
         composition_data = full_view.groupby('category')['mkt_val'].sum().reset_index()
         fig_cat = px.pie(composition_data, values='mkt_val', names='category', title='Suddivisione per Asset Class', color='category', color_discrete_map=color_map)
-        fig_cat.update_traces(textinfo='percent+value', texttemplate='%{percent} <br>€%{value:,.0f}', hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
+        fig_cat.update_traces(textinfo='percent+value', texttemplate='%{percent}<br>€%{value:,.0f}', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
         st.plotly_chart(style_chart_for_mobile(fig_cat), use_container_width=True)
     
     with tab2:
@@ -33,7 +278,7 @@ def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
         filtered_data = full_view[full_view['category'].isin(categories_to_show)]
         composition_data = filtered_data.groupby('category')['mkt_val'].sum().reset_index()
         fig_simple = px.pie(composition_data, values='mkt_val', names='category', title='Ripartizione: Azioni / Obbligazioni / Gold', color='category', color_discrete_map=color_map)
-        fig_simple.update_traces(textinfo='percent+value', texttemplate='%{percent} <br>€%{value:,.0f}', hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
+        fig_simple.update_traces(textinfo='percent+value', texttemplate='%{percent}<br>€%{value:,.0f}', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
         st.plotly_chart(style_chart_for_mobile(fig_simple), use_container_width=True)
     
     with tab3:
@@ -43,79 +288,214 @@ def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
             plot_df['pct'] = (plot_df['mkt_val'] / total) * 100
             plot_df['text'] = plot_df['pct'].apply(lambda x: f"{x:.1f}%" if x >= 0.5 else "")
             fig_all = px.pie(plot_df, values='mkt_val', names='product', title='Composizione per singolo Asset', color='category', color_discrete_map=color_map)
-            fig_all.update_traces(text=plot_df['text'], textinfo='text', hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
+            fig_all.update_traces(text=plot_df['text'], textinfo='text', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
             st.plotly_chart(style_chart_for_mobile(fig_all), use_container_width=True)
         else:
             st.info("Nessun asset con valore da mostrare.")
-            
+    
     with tab4:
         df_azionario = full_view[full_view['category'] == 'Azionario']
         if not df_azionario.empty:
             fig = px.pie(df_azionario, values='mkt_val', names='product', title='Composizione Portafoglio Azionario')
-            fig.update_traces(textinfo='percent', hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
+            fig.update_traces(textinfo='percent', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
             st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
-        else: st.info("Nessun asset azionario in portafoglio.")
-        
+        else:
+            st.info("Nessun asset azionario in portafoglio.")
+    
     with tab5:
         df_obbligazionario = full_view[full_view['category'] == 'Obbligazionario']
         if not df_obbligazionario.empty:
             fig = px.pie(df_obbligazionario, values='mkt_val', names='product', title='Composizione Portafoglio Obbligazionario')
-            fig.update_traces(textinfo='percent', hovertemplate='<b>%{label}</b><br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
+            fig.update_traces(textinfo='percent', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
             st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
-        else: st.info("Nessun asset obbligazionario in portafoglio.")
-        
+        else:
+            st.info("Nessun asset obbligazionario in portafoglio.")
+    
     with tab6:
         st.caption("Questa analisi mostra l'esposizione geografica e settoriale aggregata, pesata per il valore di ogni asset.")
         view_alloc = full_view.merge(df_alloc, on='ticker', how='left') if not df_alloc.empty else full_view.copy()
         total_val = view_alloc['mkt_val'].sum()
+        
         if total_val > 0:
             total_geo, total_sec = {}, {}
+            
             for _, row in view_alloc.iterrows():
                 val_etf = row['mkt_val']
-                if val_etf == 0 or pd.isna(val_etf): continue
+                if val_etf == 0 or pd.isna(val_etf):
+                    continue
                 
                 try:
                     geo_raw = row.get('geography_json', '{}')
                     sec_raw = row.get('sector_json', '{}')
                     g_map = geo_raw if isinstance(geo_raw, dict) else json.loads(geo_raw or '{}')
                     s_map = sec_raw if isinstance(sec_raw, dict) else json.loads(sec_raw or '{}')
-                except (json.JSONDecodeError, TypeError): 
+                except (json.JSONDecodeError, TypeError):
                     g_map, s_map = {}, {}
-
+                
                 for country, perc in g_map.items():
                     euro_exposure = val_etf * (float(perc) / 100)
                     total_geo[country] = total_geo.get(country, 0) + euro_exposure
+                
                 for sector, perc in s_map.items():
                     euro_exposure = val_etf * (float(perc) / 100)
                     total_sec[sector] = total_sec.get(sector, 0) + euro_exposure
             
             c_geo, c_sec = st.columns(2)
+            
+            # ---------- CARD GEOGRAFICA CON TOGGLE ----------
             with c_geo:
+                st.markdown(
+                    """
+                    <div style="
+                        padding:1rem 1.2rem;
+                        border-radius:12px;
+                        background:rgba(255,255,255,0.03);
+                        border:1px solid rgba(255,255,255,0.06);
+                        ">
+                      <h3 style="margin-top:0;margin-bottom:0.5rem;">🌍 Esposizione Geografica</h3>
+                      <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
+                        Principali Paesi in portafoglio.
+                      </p>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                
                 if total_geo:
-                    df_g = pd.DataFrame(list(total_geo.items()), columns=['Paese', 'Valore'])
-                    fig1 = px.pie(df_g, values='Valore', names='Paese', hole=0.4, title="Esposizione Geografica Totale")
-                    fig1.update_traces(textinfo='percent', hovertemplate='<b>%{label}</b><br>€%{value:,.0f}<br>%{percent}<extra></extra>', showlegend=False)
-                    st.plotly_chart(style_chart_for_mobile(fig1), use_container_width=True)
-                else: st.info("Nessun dato geografico. Vai su 'Gestione Dati' per scaricarlo.")
+                    df_g = pd.DataFrame(list(total_geo.items()), columns=["Paese", "Valore"])
+                    df_g = df_g.sort_values("Valore", ascending=False)
+                    total_geo_sum = df_g["Valore"].sum()
+                    df_g["Percentuale"] = (df_g["Valore"] / total_geo_sum * 100) if total_geo_sum > 0 else 0
+                    max_val_g = df_g["Percentuale"].max()
+                    
+                    view_mode_geo = st.radio(
+                        "Vista",
+                        ["Barre", "Mappa mondo"],
+                        horizontal=True,
+                        key="geo_view_mode_dashboard",
+                    )
+                    
+                    if view_mode_geo == "Barre":
+                        # Vista a barre
+                        for _, row in df_g.iterrows():
+                            bar_width = int((row["Percentuale"] / max_val_g) * 100)
+                            
+                            left, right = st.columns([3, 1])
+                            with left:
+                                st.markdown(
+                                    f"<span style='font-weight:600;'>{row['Paese']}</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            with right:
+                                st.markdown(
+                                    f"<span style='float:right;color:#7FDBFF;'>{row['Percentuale']:.2f}%</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            
+                            st.markdown(
+                                f"""
+                                <div style="background-color:#222;border-radius:4px;
+                                            width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
+                                    <div style="
+                                        background:linear-gradient(90deg,#00c9ff,#92fe9d);
+                                        width:{bar_width}%;
+                                        height:6px;
+                                        border-radius:4px;">
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        # Vista mappa mondo
+                        _render_geo_map_globe(total_geo)
+                else:
+                    st.info("Nessun dato geografico. Vai su 'Gestione Dati' per scaricarlo.")
+                
+                st.markdown("</div>", unsafe_allow_html=True)
+            
+            # ---------- CARD SETTORIALE (solo barre) ----------
             with c_sec:
+                st.markdown(
+                    """
+                    <div style="
+                        padding:1rem 1.2rem;
+                        border-radius:12px;
+                        background:rgba(255,255,255,0.03);
+                        border:1px solid rgba(255,255,255,0.06);
+                        ">
+                      <h3 style="margin-top:0;margin-bottom:0.5rem;">🧬 Esposizione Settoriale</h3>
+                      <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
+                        Distribuzione per settore.
+                      </p>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                
                 if total_sec:
-                    df_s = pd.DataFrame(list(total_sec.items()), columns=['Settore', 'Valore'])
-                    fig2 = px.pie(df_s, values='Valore', names='Settore', hole=0.4, title="Esposizione Settoriale Totale")
-                    fig2.update_traces(textinfo='percent', hovertemplate='<b>%{label}</b><br>€%{value:,.0f}<br>%{percent}<extra></extra>', showlegend=False)
-                    st.plotly_chart(style_chart_for_mobile(fig2), use_container_width=True)
-                else: st.info("Nessun dato settoriale. Vai su 'Gestione Dati' per scaricarlo.")
+                    df_s = pd.DataFrame(list(total_sec.items()), columns=["Settore", "Valore"])
+                    df_s = df_s.sort_values("Valore", ascending=False)
+                    total_sec_sum = df_s["Valore"].sum()
+                    df_s["Percentuale"] = (df_s["Valore"] / total_sec_sum * 100) if total_sec_sum > 0 else 0
+                    max_val_s = df_s["Percentuale"].max()
+                    
+                    for _, row in df_s.iterrows():
+                        bar_width = int((row["Percentuale"] / max_val_s) * 100)
+                        
+                        left, right = st.columns([3, 1])
+                        with left:
+                            st.markdown(
+                                f"<span style='font-weight:600;'>{row['Settore']}</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with right:
+                            st.markdown(
+                                f"<span style='float:right;color:#FFDC73;'>{row['Percentuale']:.2f}%</span>",
+                                unsafe_allow_html=True,
+                            )
+                        
+                        st.markdown(
+                            f"""
+                            <div style="background-color:#222;border-radius:4px;
+                                        width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
+                                <div style="
+                                    background:linear-gradient(90deg,#FFD166,#F77F00);
+                                    width:{bar_width}%;
+                                    height:6px;
+                                    border-radius:4px;">
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.info("Nessun dato settoriale. Vai su 'Gestione Dati' per scaricarlo.")
+                
+                st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.warning("Il valore del portafoglio è zero o i prezzi non sono aggiornati.")
+
 
 def render_assets_table(full_view: pd.DataFrame):
     """Renderizza la tabella con il dettaglio degli asset e gestisce la selezione."""
     st.divider()
     st.subheader("📋 Dettaglio Asset (Clicca per Analisi)")
+    
     assets_only_view = full_view[full_view['ticker'] != 'CASH']
     display_df = assets_only_view[['product', 'ticker', 'quantity', 'net_invested', 'mkt_val', 'pnl%']].sort_values('mkt_val', ascending=False)
+    
     selection = st.dataframe(
-        display_df.style.format({'quantity': "{:.2f}", 'net_invested': "€ {:.2f}", 'mkt_val': "€ {:.2f}", 'pnl%': "{:.2f}%"}).applymap(color_pnl, subset=['pnl%']),
-        use_container_width=True, selection_mode="single-row", on_select="rerun", hide_index=True)
+        display_df.style.format({
+            'quantity': "{:.2f}", 
+            'net_invested': "€ {:.2f}", 
+            'mkt_val': "€ {:.2f}", 
+            'pnl%': "{:.2f}%"
+        }).applymap(color_pnl, subset=['pnl%']),
+        use_container_width=True,
+        selection_mode="single-row",
+        on_select="rerun",
+        hide_index=True
+    )
+    
     if selection.selection.rows:
         idx = selection.selection.rows[0]
         sel_ticker = display_df.iloc[idx]['ticker']
@@ -123,14 +503,27 @@ def render_assets_table(full_view: pd.DataFrame):
             st.session_state['selected_ticker'] = sel_ticker
             st.switch_page("pages/1_Analisi_Asset.py")
 
+
 def render_historical_chart(hdf: pd.DataFrame):
     """Renderizza il grafico dell'andamento temporale."""
     st.divider()
     st.subheader("📉 Andamento Temporale")
+    
     if not hdf.empty:
         fig_hist = go.Figure()
-        fig_hist.add_trace(go.Scatter(x=hdf['Data'], y=hdf['Valore'], fill='tozeroy', name='Valore Attuale', line_color='#00CC96'))
-        fig_hist.add_trace(go.Scatter(x=hdf['Data'], y=hdf['Investito'], name='Soldi Versati', line=dict(color='#EF553B', dash='dash')))
+        fig_hist.add_trace(go.Scatter(
+            x=hdf['Data'], 
+            y=hdf['Valore'], 
+            fill='tozeroy', 
+            name='Valore Attuale', 
+            line_color='#00CC96'
+        ))
+        fig_hist.add_trace(go.Scatter(
+            x=hdf['Data'], 
+            y=hdf['Investito'], 
+            name='Soldi Versati', 
+            line=dict(color='#EF553B', dash='dash')
+        ))
         st.plotly_chart(style_chart_for_mobile(fig_hist), use_container_width=True)
     else:
         st.info("Dati insufficienti per il grafico storico.")

@@ -9,3 +9,4 @@ lxml
 beautifulsoup4
 groq
 scikit-learn
+pycountry

@@ -1,8 +1,107 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from typing import List, Dict, Any
+import pycountry
+from typing import List, Dict, Any, Optional
 from ui.components import style_chart_for_mobile
+
+
+# ========== CONVERSIONE IT -> ISO3 (soluzione pulita cross-platform) ==========
+
+COUNTRY_ALIASES_IT = {
+    # Nord America
+    "stati uniti": "United States",
+    "canada": "Canada",
+    "messico": "Mexico",
+    
+    # Europa
+    "regno unito": "United Kingdom",
+    "paesi bassi": "Netherlands",
+    "germania": "Germany",
+    "francia": "France",
+    "svizzera": "Switzerland",
+    "irlanda": "Ireland",
+    "belgio": "Belgium",
+    "italia": "Italy",
+    "spagna": "Spain",
+    "austria": "Austria",
+    "finlandia": "Finland",
+    "portogallo": "Portugal",
+    "grecia": "Greece",
+    "norvegia": "Norway",
+    "svezia": "Sweden",
+    "danimarca": "Denmark",
+    "polonia": "Poland",
+    
+    # Asia
+    "giappone": "Japan",
+    "cina": "China",
+    "india": "India",
+    "taiwan": "Taiwan",
+    "corea del sud": "Korea, Republic of",
+    "corea del nord": "Korea, Democratic People's Republic of",
+    "singapore": "Singapore",
+    "hong kong": "Hong Kong",
+    "indonesia": "Indonesia",
+    "malesia": "Malaysia",
+    "thailandia": "Thailand",
+    "vietnam": "Vietnam",
+    "filippine": "Philippines",
+    "emirati arabi uniti": "United Arab Emirates",
+    "arabia saudita": "Saudi Arabia",
+    "israele": "Israel",
+    "turchia": "Turkey",
+    
+    # Oceania
+    "australia": "Australia",
+    "nuova zelanda": "New Zealand",
+    
+    # Sud America
+    "brasile": "Brazil",
+    "argentina": "Argentina",
+    "cile": "Chile",
+    "colombia": "Colombia",
+    "perù": "Peru",
+    "venezuela": "Venezuela",
+    
+    # Africa
+    "sudafrica": "South Africa",
+    "sud africa": "South Africa",
+    "egitto": "Egypt",
+    "nigeria": "Nigeria",
+    "marocco": "Morocco",
+    
+    # Russia
+    "russia": "Russian Federation",
+}
+
+def _name_to_iso3(country_name: str) -> Optional[str]:
+    """
+    Converte nome paese (anche italiano) in ISO3.
+    Usa pycountry + alias minimi per i casi non riconosciuti.
+    """
+    if not country_name:
+        return None
+    
+    name = str(country_name).strip()
+    low = name.lower()
+    
+    # Escludi voci non-paese
+    if low in {"altri", "altro", "resto", "resto del mondo"}:
+        return None
+    
+    # 1) Prova alias IT -> EN
+    query = COUNTRY_ALIASES_IT.get(low, name)
+    
+    # 2) Prova pycountry (fuzzy search)
+    try:
+        result = pycountry.countries.search_fuzzy(query)
+        return result[0].alpha_3
+    except Exception:
+        return None
+
+
+# ========== COMPONENTI UI ==========
 
 def render_asset_selector(asset_options: List[str]) -> str:
     """
@@ -20,6 +119,7 @@ def render_asset_selector(asset_options: List[str]) -> str:
     selected_asset_str = st.selectbox("Seleziona un asset da analizzare:", asset_options, index=default_index)
     return selected_asset_str.split('(')[-1].replace(')', '')
 
+
 def render_asset_header(kpi_data: Dict[str, Any]):
     """
     Renderizza l'header della pagina con nome, ticker, ISIN e link a JustETF.
@@ -32,6 +132,7 @@ def render_asset_header(kpi_data: Dict[str, Any]):
         if 'ETF' in kpi_data.get('product_name', ''):
             st.link_button("🔎 Vedi su JustETF", f"https://www.justetf.com/it/etf-profile.html?isin={kpi_data.get('isin', '')}")
 
+
 def render_asset_kpis(kpi_data: Dict[str, Any]):
     """
     Renderizza i KPI per il singolo asset.
@@ -43,34 +144,287 @@ def render_asset_kpis(kpi_data: Dict[str, Any]):
     c4.metric("P&L", f"€ {kpi_data.get('pnl', 0):,.2f}", delta=f"{kpi_data.get('pnl_perc', 0):.2f}%")
     st.divider()
 
+
+# ========== MAPPA GEOGRAFICA PLOTLY (UX OTTIMIZZATA) ==========
+
+def render_geo_map_folium(geo_data: dict):
+    """
+    Mappa interattiva con Plotly ottimizzata UX.
+    geo_data: {nome_paese_IT: percentuale}
+    """
+    if not geo_data:
+        return
+    
+    # ========== CALCOLA "ALTRI" PRIMA DI FILTRARE ==========
+    df_full = pd.DataFrame(list(geo_data.items()), columns=["Paese_it", "Percentuale"])
+    df_full["key"] = df_full["Paese_it"].astype(str).str.strip().str.lower()
+    
+    # Totale ORIGINALE (con "Altri")
+    total_original = df_full["Percentuale"].sum()
+    
+    # Valore "Altri"
+    altri_mask = df_full["key"].isin({"altri", "altro", "resto", "resto del mondo"})
+    altri_perc = df_full[altri_mask]["Percentuale"].sum()
+    
+    # Dataset filtrato (senza "Altri")
+    df = df_full[~altri_mask].copy()
+    
+    # Conversione IT -> ISO3
+    df["iso3"] = df["Paese_it"].apply(_name_to_iso3)
+    df = df[df["iso3"].notna()].copy()
+    
+    if df.empty:
+        st.warning("Nessun paese riconosciuto per la mappa.")
+        return
+    
+    # ========== PERCENTUALI SUL TOTALE ORIGINALE (con "Altri") ==========
+    # Manteniamo i valori originali per il calcolo corretto
+    df["Percentuale_Display"] = df["Percentuale"]  # Per la colorazione
+    
+    # ========== TOGGLE MINIMALE + AVVISO "ALTRI" ==========
+    col_toggle, col_alert = st.columns([1, 4])
+    with col_toggle:
+        projection_choice = st.segmented_control(
+            label="Vista",
+            options=["🌐", "🗺️"],
+            default="🌐",
+            label_visibility="collapsed",
+            key="map_projection_toggle_asset"
+        )
+    
+    with col_alert:
+        if altri_perc > 0:
+            st.caption(
+                f"ℹ️ **{altri_perc:.1f}%** allocato in paesi non visualizzabili sulla mappa.",
+                help="Questa quota include paesi non riconosciuti o voci generiche ('Altri', 'Resto del mondo', ecc.)"
+            )
+    
+    # Mappa icone -> proiezioni
+    projection_map = {
+        "🌐": "orthographic",      # Globo 3D
+        "🗺️": "natural earth"      # Planisfero 2D
+    }
+    projection_type = projection_map.get(projection_choice, "orthographic")
+    
+    fig = px.choropleth(
+        df,
+        locations="iso3",
+        locationmode="ISO-3",
+        color="Percentuale_Display",
+        hover_name="Paese_it",
+        color_continuous_scale=[
+            [0.0, "rgba(16, 185, 129, 0.2)"],   # verde chiaro (tema coerente)
+            [0.3, "rgba(16, 185, 129, 0.5)"],
+            [0.6, "rgba(59, 130, 246, 0.7)"],   # blu (tema azionario)
+            [1.0, "rgba(99, 102, 241, 1.0)"]    # indaco intenso
+        ],
+        projection=projection_type,
+    )
+    
+    # ========== STILE GEO (tema dark Streamlit) ==========
+    fig.update_geos(
+        showocean=True, 
+        oceancolor="#0E1117",              # background Streamlit
+        showlakes=True,
+        lakecolor="#0E1117",
+        showcountries=True,
+        countrycolor="rgba(255,255,255,0.08)",
+        showcoastlines=True,
+        coastlinecolor="rgba(255,255,255,0.15)",
+        showland=True,
+        landcolor="rgba(38, 39, 48, 0.4)",
+        projection_rotation=dict(lon=10, lat=30, roll=0) if projection_type == "orthographic" else None,
+        bgcolor="rgba(0,0,0,0)"
+    )
+    
+    # ========== LAYOUT OTTIMIZZATO UX ==========
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=480,
+        coloraxis_colorbar=dict(
+            title=dict(
+                text="Peso %",
+                font=dict(size=13, color="rgba(255,255,255,0.9)")
+            ),
+            tickformat=".1f",
+            len=0.65,
+            thickness=14,
+            bgcolor="rgba(38, 39, 48, 0.8)",
+            bordercolor="rgba(255,255,255,0.1)",
+            borderwidth=1,
+            tickfont=dict(size=11, color="rgba(255,255,255,0.7)"),
+            x=1.02,
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        geo=dict(bgcolor="rgba(0,0,0,0)"),
+        font=dict(family="Inter, sans-serif", color="rgba(255,255,255,0.9)")
+    )
+    
+    # ========== TOOLTIP OTTIMIZZATO ==========
+    fig.update_traces(
+        hovertemplate=(
+            "<b style='font-size:14px'>%{hovertext}</b><br>"
+            "<span style='color:#10B981'>%{z:.2f}%</span>"
+            "<extra></extra>"
+        ),
+        marker_line_width=0.5,
+        marker_line_color="rgba(255,255,255,0.2)"
+    )
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+# ========== COMPOSIZIONE ASSET (BARRE + MAPPA) ==========
+
 def render_allocation_charts(geo_data: dict, sec_data: dict):
     """
-    Renderizza i grafici a torta per l'allocazione geografica e settoriale.
+    Mostra composizione asset con:
+    - colonna sinistra: Paesi (toggle Barre / Mappa mondo)
+    - colonna destra: Settori (liste con mini-barre)
     """
-    st.subheader("🔬 Composizione Asset")
+    st.markdown(
+        "<h2 style='margin-bottom:0.5rem;'>🧪 Composizione Asset</h2>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='color:rgba(255,255,255,0.6);margin-top:0;'>Panoramica sintetica di Paesi e Settori.</p>",
+        unsafe_allow_html=True,
+    )
+
     if not geo_data and not sec_data:
         st.info("Dati di allocazione non ancora scaricati. Vai su 'Gestione Dati' per scaricarli.")
         return
 
     col1, col2 = st.columns(2)
+
+    # ---------- CARD GEOGRAFICA ----------
     with col1:
+        st.markdown(
+            """
+            <div style="
+                padding:1rem 1.2rem;
+                border-radius:12px;
+                background:rgba(255,255,255,0.03);
+                border:1px solid rgba(255,255,255,0.06);
+                ">
+              <h3 style="margin-top:0;margin-bottom:0.5rem;">🌍 Esposizione Geografica</h3>
+              <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
+                Principali Paesi in portafoglio.
+              </p>
+            """,
+            unsafe_allow_html=True,
+        )
+
         if geo_data:
-            df_g = pd.DataFrame(list(geo_data.items()), columns=['Paese', 'Percentuale'])
-            fig_geo = px.pie(df_g, values='Percentuale', names='Paese', title='Esposizione Geografica', hole=0.4)
-            fig_geo.update_layout(showlegend=False)
-            fig_geo.update_traces(textinfo='percent', textposition='inside', hovertemplate='<b>%{label}</b>: %{value:.2f}%<extra></extra>')
-            st.plotly_chart(style_chart_for_mobile(fig_geo), use_container_width=True)
+            df_g = pd.DataFrame(list(geo_data.items()), columns=["Paese", "Percentuale"])
+            df_g = df_g.sort_values("Percentuale", ascending=False)
+            max_val_g = df_g["Percentuale"].max()
+
+            view_mode = st.radio(
+                "Vista",
+                ["Barre", "Mappa mondo"],
+                horizontal=True,
+                key="geo_view_mode",
+            )
+
+            if view_mode == "Barre":
+                # Vista a barre (lista + mini-barre)
+                for _, row in df_g.iterrows():
+                    bar_width = int((row["Percentuale"] / max_val_g) * 100)
+
+                    left, right = st.columns([3, 1])
+                    with left:
+                        st.markdown(
+                            f"<span style='font-weight:600;'>{row['Paese']}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    with right:
+                        st.markdown(
+                            f"<span style='float:right;color:#7FDBFF;'>{row['Percentuale']:.2f}%</span>",
+                            unsafe_allow_html=True,
+                        )
+
+                    st.markdown(
+                        f"""
+                        <div style="background-color:#222;border-radius:4px;
+                                    width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
+                            <div style="
+                                background:linear-gradient(90deg,#00c9ff,#92fe9d);
+                                width:{bar_width}%;
+                                height:6px;
+                                border-radius:4px;">
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            else:
+                # Vista mappa mondo
+                render_geo_map_folium(geo_data)
         else:
             st.info("Nessun dato geografico disponibile.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------- CARD SETTORIALE ----------
     with col2:
+        st.markdown(
+            """
+            <div style="
+                padding:1rem 1.2rem;
+                border-radius:12px;
+                background:rgba(255,255,255,0.03);
+                border:1px solid rgba(255,255,255,0.06);
+                ">
+              <h3 style="margin-top:0;margin-bottom:0.5rem;">🧬 Esposizione Settoriale</h3>
+              <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
+                Distribuzione per settore.
+              </p>
+            """,
+            unsafe_allow_html=True,
+        )
+
         if sec_data:
-            df_s = pd.DataFrame(list(sec_data.items()), columns=['Settore', 'Percentuale'])
-            fig_sec = px.pie(df_s, values='Percentuale', names='Settore', title='Esposizione Settoriale', hole=0.4)
-            fig_sec.update_layout(showlegend=False)
-            fig_sec.update_traces(textinfo='percent', textposition='inside', hovertemplate='<b>%{label}</b>: %{value:.2f}%<extra></extra>')
-            st.plotly_chart(style_chart_for_mobile(fig_sec), use_container_width=True)
+            df_s = pd.DataFrame(list(sec_data.items()), columns=["Settore", "Percentuale"])
+            df_s = df_s.sort_values("Percentuale", ascending=False)
+            max_val_s = df_s["Percentuale"].max()
+
+            for _, row in df_s.iterrows():
+                bar_width = int((row["Percentuale"] / max_val_s) * 100)
+
+                left, right = st.columns([3, 1])
+                with left:
+                    st.markdown(
+                        f"<span style='font-weight:600;'>{row['Settore']}</span>",
+                        unsafe_allow_html=True,
+                    )
+                with right:
+                    st.markdown(
+                        f"<span style='float:right;color:#FFDC73;'>{row['Percentuale']:.2f}%</span>",
+                        unsafe_allow_html=True,
+                    )
+
+                st.markdown(
+                    f"""
+                    <div style="background-color:#222;border-radius:4px;
+                                width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
+                        <div style="
+                            background:linear-gradient(90deg,#FFD166,#F77F00);
+                            width:{bar_width}%;
+                            height:6px;
+                            border-radius:4px;">
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
         else:
             st.info("Nessun dato settoriale disponibile.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ========== STORICO PREZZI E TRANSAZIONI ==========
 
 def render_price_history(ticker: str, asset_prices: pd.DataFrame):
     """
@@ -85,6 +439,7 @@ def render_price_history(ticker: str, asset_prices: pd.DataFrame):
     else:
         st.info("Nessuna informazione sullo storico prezzi per questo asset.")
 
+
 def render_transactions_table(df_asset_trans: pd.DataFrame):
     """
     Renderizza la tabella con lo storico delle transazioni.
@@ -92,7 +447,10 @@ def render_transactions_table(df_asset_trans: pd.DataFrame):
     st.subheader("📝 Storico Transazioni")
     st.dataframe(
         df_asset_trans[['date', 'product', 'quantity', 'local_value', 'fees']].style.format({
-            'quantity': "{:.2f}", 'local_value': "€ {:.2f}", 'fees': "€ {:.2f}", 'date': lambda x: x.strftime('%d-%m-%Y')
+            'quantity': "{:.2f}", 
+            'local_value': "€ {:.2f}", 
+            'fees': "€ {:.2f}", 
+            'date': lambda x: x.strftime('%d-%m-%Y')
         }),
         use_container_width=True,
         hide_index=True
