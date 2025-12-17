@@ -269,44 +269,348 @@ def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
     
     with tab1:
         composition_data = full_view.groupby('category')['mkt_val'].sum().reset_index()
-        fig_cat = px.pie(composition_data, values='mkt_val', names='category', title='Suddivisione per Asset Class', color='category', color_discrete_map=color_map)
-        fig_cat.update_traces(textinfo='percent+value', texttemplate='%{percent}<br>€%{value:,.0f}', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
+        composition_data['percent'] = composition_data['mkt_val'] / composition_data['mkt_val'].sum() * 100
+        
+        fig_cat = go.Figure()
+        
+        fig_cat.add_trace(go.Pie(
+            labels=composition_data['category'],
+            values=composition_data['mkt_val'],
+            hole=0.5,
+            marker=dict(
+                colors=[color_map.get(cat) for cat in composition_data['category']],
+                line=dict(color='#1e1e1e', width=4)  # Bordo scuro
+            ),
+            direction='clockwise',
+            rotation=270,
+            textinfo='label+percent',
+            texttemplate='<b>%{label}</b><br>%{percent}',
+            textfont=dict(size=13, color='#e8e8e8'),  # Testo chiaro
+            hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
+            domain={'x': [0, 1], 'y': [0, 1]}
+        ))
+        
+        # Valore totale al centro con stile dark
+        total = composition_data['mkt_val'].sum()
+        fig_cat.add_annotation(
+            text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b><br><span style='font-size:14px; color:#a0a0a0'>Totale Portfolio</span>",
+            x=0.5, y=0.5,
+            font=dict(family='Arial Black'),
+            showarrow=False
+        )
+        
+        fig_cat.update_layout(
+            title=dict(
+                text='💼 Composizione Portfolio',
+                font=dict(size=18, color='#ffffff')
+            ),
+            showlegend=True,
+            height=550,
+            font=dict(size=12, color='#e8e8e8'),
+            paper_bgcolor='#0e1117',  # Sfondo dark Streamlit
+            plot_bgcolor='#0e1117',
+            legend=dict(
+                font=dict(color='#e8e8e8'),
+                bgcolor='rgba(30,30,30,0.5)',
+                bordercolor='#333333',
+                borderwidth=1
+            )
+        )
+        
         st.plotly_chart(style_chart_for_mobile(fig_cat), use_container_width=True)
+
+
     
     with tab2:
         categories_to_show = ['Azionario', 'Obbligazionario', 'Gold']
         filtered_data = full_view[full_view['category'].isin(categories_to_show)]
         composition_data = filtered_data.groupby('category')['mkt_val'].sum().reset_index()
-        fig_simple = px.pie(composition_data, values='mkt_val', names='category', title='Ripartizione: Azioni / Obbligazioni / Gold', color='category', color_discrete_map=color_map)
-        fig_simple.update_traces(textinfo='percent+value', texttemplate='%{percent}<br>€%{value:,.0f}', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>')
+        composition_data['percent'] = composition_data['mkt_val'] / composition_data['mkt_val'].sum() * 100
+        
+        fig_simple = go.Figure()
+        
+        fig_simple.add_trace(go.Pie(
+            labels=composition_data['category'],
+            values=composition_data['mkt_val'],
+            hole=0.5,
+            marker=dict(
+                colors=[color_map.get(cat) for cat in composition_data['category']],
+                line=dict(color='#1e1e1e', width=4)
+            ),
+            direction='clockwise',
+            rotation=270,
+            textinfo='label+percent',
+            texttemplate='<b>%{label}</b><br>%{percent}',
+            textfont=dict(size=13, color='#e8e8e8'),
+            hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
+            domain={'x': [0, 1], 'y': [0, 1]}
+        ))
+        
+        total = composition_data['mkt_val'].sum()
+        fig_simple.add_annotation(
+            text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b><br><span style='font-size:14px; color:#a0a0a0'>Valore Portafoglio</span>",
+            x=0.5, y=0.5,
+            font=dict(family='Arial Black'),
+            showarrow=False
+        )
+        
+        fig_simple.update_layout(
+            title=dict(
+                text='📊 Azioni / Obbligazioni / Gold',
+                font=dict(size=18, color='#ffffff')
+            ),
+            showlegend=True,
+            height=550,
+            font=dict(size=12, color='#e8e8e8'),
+            paper_bgcolor='#0e1117',
+            plot_bgcolor='#0e1117',
+            legend=dict(
+                font=dict(color='#e8e8e8'),
+                bgcolor='rgba(30,30,30,0.5)',
+                bordercolor='#333333',
+                borderwidth=1
+            )
+        )
+        
         st.plotly_chart(style_chart_for_mobile(fig_simple), use_container_width=True)
     
     with tab3:
         plot_df = full_view[full_view['mkt_val'] > 0].copy()
         if not plot_df.empty:
+            # Ordina per categoria e valore per raggruppare visivamente asset dello stesso tipo
+            plot_df = plot_df.sort_values(['category', 'mkt_val'], ascending=[True, False])
+            
+            # Funzione per estrarre ticker senza suffisso (es. UST.MI -> UST)
+            def extract_ticker(ticker):
+                if pd.isna(ticker):
+                    return 'CASH'
+                ticker_str = str(ticker)
+                if ticker_str.lower() in ['cash', 'liquidità', 'liquidita']:
+                    return 'CASH'
+                # Prende solo la parte prima del punto
+                return ticker_str.split('.')[0]
+            
+            plot_df['ticker_short'] = plot_df['ticker'].apply(extract_ticker)
+            plot_df['label'] = plot_df['ticker_short']
+            
             total = plot_df['mkt_val'].sum()
-            plot_df['pct'] = (plot_df['mkt_val'] / total) * 100
-            plot_df['text'] = plot_df['pct'].apply(lambda x: f"{x:.1f}%" if x >= 0.5 else "")
-            fig_all = px.pie(plot_df, values='mkt_val', names='product', title='Composizione per singolo Asset', color='category', color_discrete_map=color_map)
-            fig_all.update_traces(text=plot_df['text'], textinfo='text', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
+            
+            fig_all = go.Figure()
+            
+            # Aggiungi le fette del grafico a torta
+            fig_all.add_trace(go.Pie(
+                labels=plot_df['label'],
+                values=plot_df['mkt_val'],
+                hole=0.5,
+                marker=dict(
+                    colors=[color_map.get(cat, '#9CA3AF') for cat in plot_df['category']],
+                    line=dict(color='#1e1e1e', width=2)
+                ),
+                direction='clockwise',
+                rotation=270,
+                textinfo='label+percent',
+                texttemplate='<b>%{label}</b><br>%{percent}',
+                textfont=dict(size=11, color='#e8e8e8'),
+                hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
+                domain={'x': [0, 1], 'y': [0, 1]},
+                showlegend=False  # Nascondi la legenda automatica dei singoli asset
+            ))
+            
+            # Crea legenda manuale solo per le categorie
+            categories_present = plot_df['category'].unique()
+            for cat in categories_present:
+                fig_all.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    marker=dict(size=10, color=color_map.get(cat, '#9CA3AF')),
+                    legendgroup=cat,
+                    showlegend=True,
+                    name=cat
+                ))
+            
+            fig_all.add_annotation(
+                text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b><br><span style='font-size:14px; color:#a0a0a0'>Totale Assets</span>",
+                x=0.5, y=0.5,
+                font=dict(family='Arial Black'),
+                showarrow=False
+            )
+            
+            fig_all.update_layout(
+                title=dict(
+                    text='🎯 Tutti gli Asset (raggruppati per tipo)',
+                    font=dict(size=18, color='#ffffff')
+                ),
+                showlegend=True,
+                height=550,
+                font=dict(size=12, color='#e8e8e8'),
+                paper_bgcolor='#0e1117',
+                plot_bgcolor='#0e1117',
+                legend=dict(
+                    font=dict(color='#e8e8e8'),
+                    bgcolor='rgba(30,30,30,0.5)',
+                    bordercolor='#333333',
+                    borderwidth=1
+                ),
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False)
+            )
+            
             st.plotly_chart(style_chart_for_mobile(fig_all), use_container_width=True)
         else:
             st.info("Nessun asset con valore da mostrare.")
     
     with tab4:
-        df_azionario = full_view[full_view['category'] == 'Azionario']
+        df_azionario = full_view[full_view['category'] == 'Azionario'].copy()
         if not df_azionario.empty:
-            fig = px.pie(df_azionario, values='mkt_val', names='product', title='Composizione Portafoglio Azionario')
-            fig.update_traces(textinfo='percent', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
+            df_azionario = df_azionario.sort_values('mkt_val', ascending=False)
+            
+            # Funzione per estrarre ticker senza suffisso
+            def extract_ticker(ticker):
+                if pd.isna(ticker):
+                    return 'CASH'
+                ticker_str = str(ticker)
+                if ticker_str.lower() in ['cash', 'liquidità', 'liquidita']:
+                    return 'CASH'
+                return ticker_str.split('.')[0]
+            
+            df_azionario['ticker_short'] = df_azionario['ticker'].apply(extract_ticker)
+            df_azionario['label'] = df_azionario['ticker_short']
+            
+            total = df_azionario['mkt_val'].sum()
+            
+            # Calcola percentuali per gradiente di colore
+            df_azionario['pct'] = (df_azionario['mkt_val'] / total) * 100
+            
+            # Crea gradienti di blu basati sulla percentuale (più scuro = più alta)
+            import plotly.colors
+            blue_scale = plotly.colors.sequential.Blues
+            n = len(df_azionario)
+            # Usa la stessa logica del tab5 per consistenza visiva
+            colors = [blue_scale[min(int((pct / df_azionario['pct'].max()) * (len(blue_scale) - 1)), len(blue_scale) - 1)] 
+                     for pct in df_azionario['pct']]
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Pie(
+                labels=df_azionario['label'],
+                values=df_azionario['mkt_val'],
+                hole=0.5,
+                marker=dict(
+                    colors=colors,
+                    line=dict(color='#1e1e1e', width=2)
+                ),
+                direction='clockwise',
+                rotation=270,
+                textinfo='label+percent',
+                texttemplate='<b>%{label}</b><br>%{percent}',
+                textfont=dict(size=12, color='#ffffff'),  # Testo bianco e più grande
+                hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
+                domain={'x': [0, 1], 'y': [0, 1]}
+            ))
+            
+            fig.add_annotation(
+                text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b><br><span style='font-size:14px; color:#a0a0a0'>Sezione Azionaria</span>",
+                x=0.5, y=0.5,
+                font=dict(family='Arial Black'),
+                showarrow=False
+            )
+            
+            fig.update_layout(
+                title=dict(
+                    text='📈 Dettaglio Sezione Azionaria',
+                    font=dict(size=18, color='#ffffff')
+                ),
+                showlegend=True,
+                height=550,
+                font=dict(size=12, color='#e8e8e8'),
+                paper_bgcolor='#0e1117',
+                plot_bgcolor='#0e1117',
+                legend=dict(
+                    font=dict(color='#e8e8e8'),
+                    bgcolor='rgba(30,30,30,0.5)',
+                    bordercolor='#333333',
+                    borderwidth=1
+                )
+            )
+            
             st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
         else:
             st.info("Nessun asset azionario in portafoglio.")
     
     with tab5:
-        df_obbligazionario = full_view[full_view['category'] == 'Obbligazionario']
+        df_obbligazionario = full_view[full_view['category'] == 'Obbligazionario'].copy()
         if not df_obbligazionario.empty:
-            fig = px.pie(df_obbligazionario, values='mkt_val', names='product', title='Composizione Portafoglio Obbligazionario')
-            fig.update_traces(textinfo='percent', hovertemplate='%{label}<br>Valore: €%{value:,.2f}<br>(%{percent})<extra></extra>', showlegend=False)
+            df_obbligazionario = df_obbligazionario.sort_values('mkt_val', ascending=False)
+            
+            # Funzione per estrarre ticker senza suffisso
+            def extract_ticker(ticker):
+                if pd.isna(ticker):
+                    return 'CASH'
+                ticker_str = str(ticker)
+                if ticker_str.lower() in ['cash', 'liquidità', 'liquidita']:
+                    return 'CASH'
+                return ticker_str.split('.')[0]
+            
+            df_obbligazionario['ticker_short'] = df_obbligazionario['ticker'].apply(extract_ticker)
+            df_obbligazionario['label'] = df_obbligazionario['ticker_short']
+            
+            total = df_obbligazionario['mkt_val'].sum()
+            
+            # Calcola percentuali per gradiente di colore
+            df_obbligazionario['pct'] = (df_obbligazionario['mkt_val'] / total) * 100
+            
+            # Crea gradienti di rosso basati sulla percentuale (più scuro = più alta)
+            import plotly.colors
+            red_scale = plotly.colors.sequential.Reds
+            n = len(df_obbligazionario)
+            # Inverti per avere il più scuro per i valori più alti
+            colors = [red_scale[min(int((pct / df_obbligazionario['pct'].max()) * (len(red_scale) - 1)), len(red_scale) - 1)] 
+                     for pct in df_obbligazionario['pct']]
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Pie(
+                labels=df_obbligazionario['label'],
+                values=df_obbligazionario['mkt_val'],
+                hole=0.5,
+                marker=dict(
+                    colors=colors,
+                    line=dict(color='#1e1e1e', width=2)
+                ),
+                direction='clockwise',
+                rotation=270,
+                textinfo='label+percent',
+                texttemplate='<b>%{label}</b><br>%{percent}',
+                textfont=dict(size=12, color='#ffffff'),
+                hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
+                domain={'x': [0, 1], 'y': [0, 1]}
+            ))
+            
+            fig.add_annotation(
+                text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b><br><span style='font-size:14px; color:#a0a0a0'>Sezione Obbligazionaria</span>",
+                x=0.5, y=0.5,
+                font=dict(family='Arial Black'),
+                showarrow=False
+            )
+            
+            fig.update_layout(
+                title=dict(
+                    text='📉 Dettaglio Sezione Obbligazionario',
+                    font=dict(size=18, color='#ffffff')
+                ),
+                showlegend=True,
+                height=550,
+                font=dict(size=12, color='#e8e8e8'),
+                paper_bgcolor='#0e1117',
+                plot_bgcolor='#0e1117',
+                legend=dict(
+                    font=dict(color='#e8e8e8'),
+                    bgcolor='rgba(30,30,30,0.5)',
+                    bordercolor='#333333',
+                    borderwidth=1
+                )
+            )
+            
             st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
         else:
             st.info("Nessun asset obbligazionario in portafoglio.")
