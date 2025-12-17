@@ -1,4 +1,11 @@
 import pandas as pd
+import hashlib
+import requests
+import yfinance as yf
+import streamlit as st
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+from database.connection import get_data, save_data
 from services.portfolio_service import calculate_liquidity
 def parse_degiro_csv(file):
     df = pd.read_csv(file)
