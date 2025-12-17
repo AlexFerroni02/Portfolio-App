@@ -594,6 +594,9 @@ def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
                 )
                 
                 if total_sec:
+                    # Spazio per allineare con il toggle della colonna geografica
+                    st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
+                    
                     df_s = pd.DataFrame(list(total_sec.items()), columns=["Settore", "Valore"])
                     df_s = df_s.sort_values("Valore", ascending=False)
                     total_sec_sum = df_s["Valore"].sum()

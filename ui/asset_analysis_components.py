@@ -246,6 +246,9 @@ def render_allocation_charts(geo_data: dict, sec_data: dict):
         )
 
         if sec_data:
+            # Spazio per allineare con il toggle della colonna geografica
+            st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
+            
             df_s = pd.DataFrame(list(sec_data.items()), columns=["Settore", "Percentuale"])
             df_s = df_s.sort_values("Percentuale", ascending=False)
             max_val_s = df_s["Percentuale"].max()

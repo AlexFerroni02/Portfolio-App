@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from database.connection import get_data, save_data
 from services.portfolio_service import calculate_liquidity
+import json
 def parse_degiro_csv(file):
     df = pd.read_csv(file)
     cols = ['Quantità', 'Quotazione', 'Valore', 'Costi di transazione', 'Totale']
@@ -86,26 +87,212 @@ def calculate_net_worth_snapshot(snapshot_date: pd.Timestamp, df_trans: pd.DataF
 
 def fetch_justetf_allocation_robust(isin):
     """
-    Scarica da JustETF usando un metodo robusto basato su BeautifulSoup
-    che cerca le intestazioni 'Paesi' e 'Settori' per identificare le tabelle corrette,
-    indipendentemente dalla loro posizione nella pagina.
+    Scarica da JustETF con fallback intelligente:
+    1. Prova API JSON (se esiste)
+    2. Scraping BeautifulSoup avanzato con AJAX Wicket
+    3. Fallback Playwright (browser automation) se gli altri metodi falliscono
+    """
+    
+    # METODO 1: Prova a trovare endpoint API o dati JSON nell'HTML
+    geo_api, sec_api = _try_fetch_justetf_api(isin)
+
+    # METODO 2: Fallback a BeautifulSoup / AJAX per ottenere dati completi
+    geo_bs, sec_bs = _fetch_justetf_beautifulsoup(isin)
+
+    # Unisci risultati: preferisci dettagli da BeautifulSoup/AJAX quando presenti
+    geo_dict = {}
+    sec_dict = {}
+    if geo_api:
+        geo_dict.update(geo_api)
+    if geo_bs:
+        geo_dict.update(geo_bs)
+    if sec_api:
+        sec_dict.update(sec_api)
+    if sec_bs:
+        sec_dict.update(sec_bs)
+
+    # METODO 3: Se i risultati sono incompleti (<=5 paesi/settori), prova Playwright
+    if (len(geo_dict) <= 5 or len(sec_dict) <= 5):
+        st.info("🔄 Dati limitati, provo con Playwright per espandere le tabelle...")
+        geo_pw, sec_pw = _fetch_justetf_playwright(isin)
+        if geo_pw:
+            geo_dict.update(geo_pw)
+        if sec_pw:
+            sec_dict.update(sec_pw)
+
+    return geo_dict, sec_dict
+
+
+def _try_fetch_justetf_api(isin):
+    """
+    Prova a estrarre dati da JSON embedded o API nascosta
     """
     url = f"https://www.justetf.com/it/etf-profile.html?isin={isin}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/html, */*",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8"
+    }
+    
+    geo_dict, sec_dict = {}, {}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        # Cerca script JSON nell'HTML
+        soup = BeautifulSoup(response.text, 'lxml')
+        
+        # Cerca dati JSON embedded (tipo application/json o window.dataLayer)
+        scripts = soup.find_all('script', type='application/json')
+        for script in scripts:
+            try:
+                import json
+                data = json.loads(script.string)
+                # Cerca chiavi tipo "countries", "sectors", "allocation"
+                if isinstance(data, dict):
+                    # Adatta in base alla struttura reale
+                    if 'countries' in data:
+                        geo_dict = data['countries']
+                    if 'sectors' in data:
+                        sec_dict = data['sectors']
+            except:
+                pass
+        
+        # Cerca anche in window.__ variables
+        for script in soup.find_all('script'):
+            if script.string and 'countries' in str(script.string):
+                # Qui potresti parsare JavaScript inline se necessario
+                pass
+                
+    except Exception as e:
+        pass  # Silenzioso, proveremo BeautifulSoup
+    
+    return geo_dict, sec_dict
+
+
+def _fetch_justetf_beautifulsoup(isin):
+    """
+    Metodo BeautifulSoup migliorato che cerca anche nelle righe nascoste
+    e tenta di caricare dati extra via link "load more".
+    """
+    url = f"https://www.justetf.com/it/etf-profile.html?isin={isin}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "X-Requested-With": "XMLHttpRequest"
     }
 
     geo_dict, sec_dict = {}, {}
     try:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.text, 'lxml')
-        
-        # --- ESTRAZIONE DATI GEOGRAFIA ---
+
+        # helper: perform wicket ajax request (uses session, sets Wicket-Ajax-BaseURL)
+        def _request_wicket_ajax(isin_local, ajax_url, headers_local):
+            import re
+            session = requests.Session()
+            base_page = f"https://www.justetf.com/it/etf-profile.html?isin={isin_local}"
+            try:
+                r0 = session.get(base_page, headers={'User-Agent': headers_local.get('User-Agent','Mozilla/5.0')}, timeout=10)
+                # try to extract wicket.ajax.baseurl
+                m = re.search(r'wicket\.ajax\.baseurl\s*=\s*"([^"]+)"', r0.text)
+                baseval = m.group(1) if m else f"it/etf-profile.html?isin={isin_local}"
+            except Exception:
+                baseval = f"it/etf-profile.html?isin={isin_local}"
+
+            headers_ajax = headers_local.copy()
+            headers_ajax.update({
+                'X-Requested-With': 'XMLHttpRequest',
+                'Wicket-Ajax': 'true',
+                'Wicket-Ajax-BaseURL': baseval,
+                'Accept': '*/*'
+            })
+            try:
+                # use POST as Wicket often expects POST
+                r = session.post(ajax_url, headers=headers_ajax, timeout=15)
+                return r
+            except Exception:
+                try:
+                    return session.get(ajax_url, headers=headers_ajax, timeout=15)
+                except Exception:
+                    return None
+
+
+        # --- GEOGRAFIA ---
         h3_geo = soup.find('h3', string=lambda text: text and 'Paesi' in text)
         if h3_geo:
+            load_more_link = soup.find('a', class_='etf-holdings_countries_load-more_link')
+
+            if load_more_link:
+                extra_href = load_more_link.get('href')
+                extra_url = None
+                if extra_href and extra_href not in ['#', 'javascript:void(0)', '']:
+                    extra_url = extra_href
+                # if href is '#' or empty, try extract AJAX URL from scripts
+                if not extra_url or extra_url in ['#', 'javascript:void(0)', '']:
+                    import re
+                    scripts_text = ' '.join([s.string or '' for s in soup.find_all('script')])
+                    m = re.search(r'Wicket\.Ajax\.ajax\(\{[^}]*u\"?:\s*\"([^\"]*holdingsSection-countries-loadMoreCountries[^\"]*)\"', scripts_text)
+                    if not m:
+                        m = re.search(r'Wicket\.Ajax\.ajax\(\{[^}]*u\'?:\s*\'([^\']*holdingsSection-countries-loadMoreCountries[^\']*)\'', scripts_text)
+                    if m:
+                        extra_url = m.group(1)
+                if extra_url:
+                    if not extra_url.startswith('http'):
+                        extra_url = f"https://www.justetf.com{extra_url}"
+
+                try:
+                    st.info(f"🔄 Caricamento dati extra da: {extra_url}")
+                    # se è un endpoint Wicket AJAX usiamo la chiamata emulata
+                    extra_response = None
+                    if '_wicket=1' in extra_url or 'loadMore' in extra_url or 'holdingsSection' in extra_url:
+                        extra_response = _request_wicket_ajax(isin, extra_url, headers)
+                    if extra_response is None:
+                        extra_response = requests.get(extra_url, headers=headers, timeout=10)
+                    extra_response.raise_for_status()
+
+                    try:
+                        extra_data = extra_response.json()
+                        if isinstance(extra_data, dict) and 'countries' in extra_data:
+                            geo_dict.update(extra_data['countries'])
+                    except Exception:
+                        txt = extra_response.text
+                        # Gestisci risposta AJAX XML (Wicket) contenente CDATA con HTML
+                        if txt.strip().startswith('<?xml') or '<ajax-response' in txt:
+                            import re
+                            cdata_blocks = re.findall(r'<!\[CDATA\[(.*?)\]\]>', txt, flags=re.S)
+                            for block in cdata_blocks:
+                                inner = BeautifulSoup(block, 'lxml')
+                                for row in inner.find_all('tr'):
+                                    cols = row.find_all('td')
+                                    if len(cols) >= 2:
+                                        key = cols[0].get_text(strip=True)
+                                        val_str = cols[1].get_text(strip=True).replace('%', '').replace(',', '.')
+                                        try:
+                                            val = float(val_str)
+                                            if val < 101:
+                                                geo_dict[key] = val
+                                        except Exception:
+                                            pass
+                        else:
+                            extra_soup = BeautifulSoup(txt, 'lxml')
+                            for row in extra_soup.find_all('tr'):
+                                cols = row.find_all('td')
+                                if len(cols) >= 2:
+                                    key = cols[0].text.strip()
+                                    val_str = cols[1].text.strip().replace('%', '').replace(',', '.')
+                                    try:
+                                        val = float(val_str)
+                                        if val < 101:
+                                            geo_dict[key] = val
+                                    except Exception:
+                                        pass
+                except Exception as e:
+                    st.warning(f"⚠️ Impossibile caricare dati extra: {e}")
+
             table = h3_geo.find_next('table')
             if table:
                 for row in table.find_all('tr'):
@@ -115,13 +302,79 @@ def fetch_justetf_allocation_robust(isin):
                         val_str = cols[1].text.strip().replace('%', '').replace(',', '.')
                         try:
                             val = float(val_str)
-                            if val < 101: geo_dict[key] = val
+                            if val < 101:
+                                geo_dict[key] = val
                         except (ValueError, TypeError):
                             pass
-        
-        # --- ESTRAZIONE DATI SETTORI ---
+
+        # --- SETTORI ---
         h3_sec = soup.find('h3', string=lambda text: text and 'Settori' in text)
         if h3_sec:
+            load_more_link = soup.find('a', class_='etf-holdings_sectors_load-more_link')
+
+            if load_more_link:
+                extra_href = load_more_link.get('href')
+                extra_url = None
+                if extra_href and extra_href not in ['#', 'javascript:void(0)', '']:
+                    extra_url = extra_href
+                if not extra_url or extra_url in ['#', 'javascript:void(0)', '']:
+                    import re
+                    scripts_text = ' '.join([s.string or '' for s in soup.find_all('script')])
+                    m = re.search(r'Wicket\.Ajax\.ajax\(\{[^}]*u\"?:\s*\"([^\"]*holdingsSection-sectors-loadMoreSectors[^\"]*)\"', scripts_text)
+                    if not m:
+                        m = re.search(r'Wicket\.Ajax\.ajax\(\{[^}]*u\'?:\s*\'([^\']*holdingsSection-sectors-loadMoreSectors[^\']*)\'', scripts_text)
+                    if m:
+                        extra_url = m.group(1)
+                if extra_url:
+                    if not extra_url.startswith('http'):
+                        extra_url = f"https://www.justetf.com{extra_url}"
+
+                try:
+                    extra_response = None
+                    if '_wicket=1' in extra_url or 'loadMore' in extra_url or 'holdingsSection' in extra_url:
+                        extra_response = _request_wicket_ajax(isin, extra_url, headers)
+                    if extra_response is None:
+                        extra_response = requests.get(extra_url, headers=headers, timeout=10)
+                    extra_response.raise_for_status()
+
+                    try:
+                        extra_data = extra_response.json()
+                        if isinstance(extra_data, dict) and 'sectors' in extra_data:
+                            sec_dict.update(extra_data['sectors'])
+                    except Exception:
+                        txt = extra_response.text
+                        if txt.strip().startswith('<?xml') or '<ajax-response' in txt:
+                            import re
+                            cdata_blocks = re.findall(r'<!\[CDATA\[(.*?)\]\]>', txt, flags=re.S)
+                            for block in cdata_blocks:
+                                inner = BeautifulSoup(block, 'lxml')
+                                for row in inner.find_all('tr'):
+                                    cols = row.find_all('td')
+                                    if len(cols) >= 2:
+                                        key = cols[0].get_text(strip=True)
+                                        val_str = cols[1].get_text(strip=True).replace('%', '').replace(',', '.')
+                                        try:
+                                            val = float(val_str)
+                                            if val < 101:
+                                                sec_dict[key] = val
+                                        except Exception:
+                                            pass
+                        else:
+                            extra_soup = BeautifulSoup(txt, 'lxml')
+                            for row in extra_soup.find_all('tr'):
+                                cols = row.find_all('td')
+                                if len(cols) >= 2:
+                                    key = cols[0].text.strip()
+                                    val_str = cols[1].text.strip().replace('%', '').replace(',', '.')
+                                    try:
+                                        val = float(val_str)
+                                        if val < 101:
+                                            sec_dict[key] = val
+                                    except Exception:
+                                        pass
+                except Exception as e:
+                    st.warning(f"⚠️ Impossibile caricare dati settori extra: {e}")
+
             table = h3_sec.find_next('table')
             if table:
                 for row in table.find_all('tr'):
@@ -131,16 +384,97 @@ def fetch_justetf_allocation_robust(isin):
                         val_str = cols[1].text.strip().replace('%', '').replace(',', '.')
                         try:
                             val = float(val_str)
-                            if val < 101: sec_dict[key] = val
+                            if val < 101:
+                                sec_dict[key] = val
                         except (ValueError, TypeError):
                             pass
-                            
+
         return geo_dict, sec_dict
 
     except Exception as e:
         st.error(f"Scraping fallito per {isin}: {e}")
         return {}, {}
     
+
+def _fetch_justetf_playwright(isin):
+    """
+    Usa Playwright - più leggero e auto-gestito di Selenium.
+    Gestisce cookie banner e click su "Mostra di più" che espande la tabella principale.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        geo_dict, sec_dict = {}, {}
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            url = f"https://www.justetf.com/it/etf-profile.html?isin={isin}"
+            page.goto(url, wait_until='networkidle')
+            
+            # Chiudi cookie banner se presente (blocca i click)
+            try:
+                cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll')
+                if cookie_btn.is_visible(timeout=3000):
+                    cookie_btn.click()
+                    page.wait_for_timeout(500)
+            except Exception:
+                pass  # Cookie già accettati o banner non presente
+
+            # --- PAESI ---
+            try:
+                countries_link = page.locator('[data-testid="etf-holdings_countries_load-more_link"]')
+                if countries_link.is_visible(timeout=2000):
+                    countries_link.click()
+                    page.wait_for_timeout(1500)  # Aspetta espansione tabella
+            except Exception:
+                pass
+
+            # Estrai dati dalla tabella principale (ora espansa)
+            rows = page.locator('h3:text-is("Paesi") ~ table tr').all()
+            for row in rows:
+                cols = row.locator('td').all()
+                if len(cols) >= 2:
+                    try:
+                        key = cols[0].inner_text().strip()
+                        val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
+                        val = float(val_str)
+                        if 0 < val < 101:
+                            geo_dict[key] = val
+                    except Exception:
+                        pass
+
+            # --- SETTORI ---
+            try:
+                sectors_link = page.locator('[data-testid="etf-holdings_sectors_load-more_link"]')
+                if sectors_link.is_visible(timeout=2000):
+                    sectors_link.click()
+                    page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+            rows = page.locator('h3:text-is("Settori") ~ table tr').all()
+            for row in rows:
+                cols = row.locator('td').all()
+                if len(cols) >= 2:
+                    try:
+                        key = cols[0].inner_text().strip()
+                        val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
+                        val = float(val_str)
+                        if 0 < val < 101:
+                            sec_dict[key] = val
+                    except Exception:
+                        pass
+
+            browser.close()
+
+        return geo_dict, sec_dict
+
+    except ImportError:
+        st.error("⚠️ Installa Playwright: pip install playwright && playwright install chromium")
+        return {}, {}
+    except Exception as e:
+        st.error(f"❌ Playwright fallito: {e}")
+        return {}, {}
 
 def sync_prices(df_trans, df_map):
     if df_trans.empty or df_map.empty: return 0

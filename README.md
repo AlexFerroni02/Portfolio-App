@@ -50,20 +50,20 @@ source venv/bin/activate
 
 ### B. Install requirements
 
-Ensure your `requirements.txt` file contains the following:
-```
-streamlit
-pandas
-yfinance
-plotly
-psycopg2-binary
-sqlalchemy
+**Quick setup (recommended):**
+```bash
+chmod +x setup.sh
+./setup.sh
 ```
 
-Then, install the libraries:
+**Manual setup:**
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 ```
+
+The app uses **Playwright** with Chromium for advanced web scraping (JustETF data).
+Chromium (~100MB) will be downloaded automatically by the setup script.
 
 ### C. Configure local secrets
 
