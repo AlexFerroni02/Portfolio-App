@@ -1,14 +1,16 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import pycountry
 from typing import List, Dict, Any, Optional
 from ui.components import style_chart_for_mobile
+from ui.charts import render_geo_map, plot_price_history
 
 
-# ========== CONVERSIONE IT -> ISO3 (soluzione pulita cross-platform) ==========
+# Le costanti e funzioni per la mappa geografica sono ora in ui/charts.py
+# Manteniamo qui solo un riferimento per retrocompatibilità se necessario
+from ui.charts import COUNTRY_ALIASES_IT as _COUNTRY_ALIASES_IT_UNUSED
 
-COUNTRY_ALIASES_IT = {
+_COUNTRY_ALIASES_IT_OLD = {
     # Nord America
     "stati uniti": "United States",
     "canada": "Canada",
@@ -73,32 +75,7 @@ COUNTRY_ALIASES_IT = {
     
     # Russia
     "russia": "Russian Federation",
-}
-
-def _name_to_iso3(country_name: str) -> Optional[str]:
-    """
-    Converte nome paese (anche italiano) in ISO3.
-    Usa pycountry + alias minimi per i casi non riconosciuti.
-    """
-    if not country_name:
-        return None
-    
-    name = str(country_name).strip()
-    low = name.lower()
-    
-    # Escludi voci non-paese
-    if low in {"altri", "altro", "resto", "resto del mondo"}:
-        return None
-    
-    # 1) Prova alias IT -> EN
-    query = COUNTRY_ALIASES_IT.get(low, name)
-    
-    # 2) Prova pycountry (fuzzy search)
-    try:
-        result = pycountry.countries.search_fuzzy(query)
-        return result[0].alpha_3
-    except Exception:
-        return None
+}  # Mantenuto per retrocompatibilità, ma non più usato
 
 
 # ========== COMPONENTI UI ==========
@@ -145,133 +122,15 @@ def render_asset_kpis(kpi_data: Dict[str, Any]):
     st.divider()
 
 
-# ========== MAPPA GEOGRAFICA PLOTLY (UX OTTIMIZZATA) ==========
+# ========== MAPPA GEOGRAFICA (ORA MODULARE) ==========
 
 def render_geo_map_folium(geo_data: dict):
     """
-    Mappa interattiva con Plotly ottimizzata UX.
+    DEPRECATED: Usa render_geo_map da ui.charts invece.
+    Manteniamo questo wrapper per retrocompatibilità.
     geo_data: {nome_paese_IT: percentuale}
     """
-    if not geo_data:
-        return
-    
-    # ========== CALCOLA "ALTRI" PRIMA DI FILTRARE ==========
-    df_full = pd.DataFrame(list(geo_data.items()), columns=["Paese_it", "Percentuale"])
-    df_full["key"] = df_full["Paese_it"].astype(str).str.strip().str.lower()
-    
-    # Totale ORIGINALE (con "Altri")
-    total_original = df_full["Percentuale"].sum()
-    
-    # Valore "Altri"
-    altri_mask = df_full["key"].isin({"altri", "altro", "resto", "resto del mondo"})
-    altri_perc = df_full[altri_mask]["Percentuale"].sum()
-    
-    # Dataset filtrato (senza "Altri")
-    df = df_full[~altri_mask].copy()
-    
-    # Conversione IT -> ISO3
-    df["iso3"] = df["Paese_it"].apply(_name_to_iso3)
-    df = df[df["iso3"].notna()].copy()
-    
-    if df.empty:
-        st.warning("Nessun paese riconosciuto per la mappa.")
-        return
-    
-    # ========== PERCENTUALI SUL TOTALE ORIGINALE (con "Altri") ==========
-    # Manteniamo i valori originali per il calcolo corretto
-    df["Percentuale_Display"] = df["Percentuale"]  # Per la colorazione
-    
-    # ========== TOGGLE MINIMALE + AVVISO "ALTRI" ==========
-    col_toggle, col_alert = st.columns([1, 4])
-    with col_toggle:
-        projection_choice = st.segmented_control(
-            label="Vista",
-            options=["🌐", "🗺️"],
-            default="🌐",
-            label_visibility="collapsed",
-            key="map_projection_toggle_asset"
-        )
-    
-    with col_alert:
-        if altri_perc > 0:
-            st.caption(
-                f"ℹ️ **{altri_perc:.1f}%** allocato in paesi non visualizzabili sulla mappa.",
-                help="Questa quota include paesi non riconosciuti o voci generiche ('Altri', 'Resto del mondo', ecc.)"
-            )
-    
-    # Mappa icone -> proiezioni
-    projection_map = {
-        "🌐": "orthographic",      # Globo 3D
-        "🗺️": "natural earth"      # Planisfero 2D
-    }
-    projection_type = projection_map.get(projection_choice, "orthographic")
-    
-    fig = px.choropleth(
-        df,
-        locations="iso3",
-        locationmode="ISO-3",
-        color="Percentuale_Display",
-        hover_name="Paese_it",
-        color_continuous_scale=[
-            [0.0, "rgba(16, 185, 129, 0.2)"],   # verde chiaro (tema coerente)
-            [0.3, "rgba(16, 185, 129, 0.5)"],
-            [0.6, "rgba(59, 130, 246, 0.7)"],   # blu (tema azionario)
-            [1.0, "rgba(99, 102, 241, 1.0)"]    # indaco intenso
-        ],
-        projection=projection_type,
-    )
-    
-    # ========== STILE GEO (tema dark Streamlit) ==========
-    fig.update_geos(
-        showocean=True, 
-        oceancolor="#0E1117",              # background Streamlit
-        showlakes=True,
-        lakecolor="#0E1117",
-        showcountries=True,
-        countrycolor="rgba(255,255,255,0.08)",
-        showcoastlines=True,
-        coastlinecolor="rgba(255,255,255,0.15)",
-        showland=True,
-        landcolor="rgba(38, 39, 48, 0.4)",
-        projection_rotation=dict(lon=10, lat=30, roll=0) if projection_type == "orthographic" else None,
-        bgcolor="rgba(0,0,0,0)"
-    )
-    
-    # ========== LAYOUT OTTIMIZZATO UX ==========
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=480,
-        coloraxis_colorbar=dict(
-            title=dict(
-                text="Peso %",
-                font=dict(size=13, color="rgba(255,255,255,0.9)")
-            ),
-            tickformat=".1f",
-            len=0.65,
-            thickness=14,
-            bgcolor="rgba(38, 39, 48, 0.8)",
-            bordercolor="rgba(255,255,255,0.1)",
-            borderwidth=1,
-            tickfont=dict(size=11, color="rgba(255,255,255,0.7)"),
-            x=1.02,
-        ),
-        paper_bgcolor="rgba(0,0,0,0)",
-        geo=dict(bgcolor="rgba(0,0,0,0)"),
-        font=dict(family="Inter, sans-serif", color="rgba(255,255,255,0.9)")
-    )
-    
-    # ========== TOOLTIP OTTIMIZZATO ==========
-    fig.update_traces(
-        hovertemplate=(
-            "<b style='font-size:14px'>%{hovertext}</b><br>"
-            "<span style='color:#10B981'>%{z:.2f}%</span>"
-            "<extra></extra>"
-        ),
-        marker_line_width=0.5,
-        marker_line_color="rgba(255,255,255,0.2)"
-    )
-    
-    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    render_geo_map(geo_data, value_type="percent", toggle_key="map_projection_toggle_asset")
 
 
 # ========== COMPOSIZIONE ASSET (BARRE + MAPPA) ==========
@@ -320,11 +179,13 @@ def render_allocation_charts(geo_data: dict, sec_data: dict):
             df_g = df_g.sort_values("Percentuale", ascending=False)
             max_val_g = df_g["Percentuale"].max()
 
+            # Toggle Barre/Mappa dentro la card
             view_mode = st.radio(
                 "Vista",
-                ["Barre", "Mappa mondo"],
+                ["Barre", "Mappa"],
                 horizontal=True,
                 key="geo_view_mode",
+                label_visibility="collapsed"
             )
 
             if view_mode == "Barre":
