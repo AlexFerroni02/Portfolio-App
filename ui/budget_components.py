@@ -34,7 +34,7 @@ def render_monthly_charts(df_month: pd.DataFrame, summary: dict):
         if not df_spese.empty:
             fig_pie = px.pie(df_spese, values='amount', names='category', hole=0.4)
             fig_pie.update_layout(showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(style_chart_for_mobile(fig_pie), use_container_width=True)
+            st.plotly_chart(style_chart_for_mobile(fig_pie), width='stretch')
         else:
             st.info("Nessuna spesa registrata.")
     with c2:
@@ -44,7 +44,7 @@ def render_monthly_charts(df_month: pd.DataFrame, summary: dict):
         fig_bar.add_trace(go.Bar(name='Spese', x=['Flusso'], y=[summary['uscite']], marker_color='#dc3545'))
         fig_bar.add_trace(go.Bar(name='Investito', x=['Flusso'], y=[summary['investito_mese']], marker_color='#007bff'))
         fig_bar.update_layout(barmode='group', margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(style_chart_for_mobile(fig_bar), use_container_width=True)
+        st.plotly_chart(style_chart_for_mobile(fig_bar), width='stretch')
 
 def render_net_worth_section(df_nw: pd.DataFrame):
     """Renderizza la sezione completa del patrimonio netto (grafici e tabella)."""
@@ -68,16 +68,16 @@ def render_net_worth_section(df_nw: pd.DataFrame):
         fig_nw.add_trace(go.Scatter(x=df_trend['date'], y=df_trend['trend'], name='Trend', line=dict(dash='dot', color='rgba(255,255,0,0.6)')))
     
     fig_nw.update_layout(title="Patrimonio Netto vs Obiettivo")
-    st.plotly_chart(style_chart_for_mobile(fig_nw), use_container_width=True)
+    st.plotly_chart(style_chart_for_mobile(fig_nw), width='stretch')
 
     fig_increase = px.bar(df_chart[df_chart['monthly_increase'].notna() & (df_chart['monthly_increase'] != 0)], x='date', y='monthly_increase', title="Incremento Mensile del Patrimonio")
     fig_increase.update_traces(marker_color=['#28a745' if x >= 0 else '#dc3545' for x in df_chart['monthly_increase'].dropna()])
-    st.plotly_chart(style_chart_for_mobile(fig_increase), use_container_width=True)
+    st.plotly_chart(style_chart_for_mobile(fig_increase), width='stretch')
 
     st.write("###### Tabella Riassuntiva")
     df_display = df_nw[['date', 'net_worth', 'monthly_increase', 'goal']].copy()
     df_display['date'] = df_display['date'].dt.strftime('%m/%y')
-    st.dataframe(df_display.dropna(subset=['net_worth']), use_container_width=True, hide_index=True,
+    st.dataframe(df_display.dropna(subset=['net_worth']), width='stretch', hide_index=True,
         column_config={
             "date": "Data", "net_worth": st.column_config.NumberColumn("Patrimonio (€)", format="€ %.2f"),
             "monthly_increase": st.column_config.NumberColumn("Incremento (€)", format="€ %.2f"),
@@ -95,7 +95,7 @@ def render_transactions_editor(df_month: pd.DataFrame, df_budget_full: pd.DataFr
             df_edit,
             column_config={"Elimina": st.column_config.CheckboxColumn(default=False), "date": st.column_config.DateColumn("Data", format="DD-MM-YYYY"), "amount": st.column_config.NumberColumn("Importo", format="€ %.2f")},
             disabled=["date", "type", "category", "amount", "note"],
-            hide_index=True, use_container_width=True
+            hide_index=True, width='stretch'
         )
         to_delete = edited_df[edited_df["Elimina"] == True]
         if not to_delete.empty:

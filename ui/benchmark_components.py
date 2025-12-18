@@ -28,7 +28,7 @@ def render_benchmark_kpis(df_chart: pd.DataFrame, bench_ticker: str):
 def render_transaction_log(df_log: pd.DataFrame, bench_ticker: str):
     """Mostra il log delle transazioni simulate per il benchmark."""
     with st.expander("📋 Log Transazioni Simulate sul Benchmark"):
-        st.dataframe(df_log, use_container_width=True, hide_index=True)
+        st.dataframe(df_log, width='stretch', hide_index=True)
         csv = df_log.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Scarica Log",
@@ -44,7 +44,7 @@ def render_performance_chart(df_chart: pd.DataFrame, bench_ticker: str):
     fig.add_trace(go.Scatter(x=df_chart['Data'], y=df_chart['Tu'], name='Il Tuo Portafoglio', line=dict(color='#00CC96', width=3)))
     fig.add_trace(go.Scatter(x=df_chart['Data'], y=df_chart['Benchmark'], name=f'Benchmark ({bench_ticker})', line=dict(color='#A0A0A0', width=2, dash='dot')))
     fig.update_layout(title_text="Valore nel Tempo (€)")
-    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
 
 def render_drawdown_chart(df_chart: pd.DataFrame):
     """Calcola e mostra il grafico del drawdown."""
@@ -62,4 +62,4 @@ def render_drawdown_chart(df_chart: pd.DataFrame):
     fig.add_trace(go.Scatter(x=df_dd['Data'], y=df_dd['Tu_DD'], name='Il Tuo Drawdown', fill='tozeroy', line=dict(color='#EF553B', width=1)))
     fig.add_trace(go.Scatter(x=df_dd['Data'], y=df_dd['Bench_DD'], name='Benchmark Drawdown', line=dict(color='#A0A0A0', width=1, dash='dot')))
     fig.update_layout(title_text="Perdita dai Massimi (%)", yaxis_ticksuffix="%")
-    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    st.plotly_chart(style_chart_for_mobile(fig), width='stretch')

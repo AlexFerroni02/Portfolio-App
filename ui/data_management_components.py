@@ -52,7 +52,7 @@ def render_mapping_tab():
     df_map_edit.insert(0, "Elimina", False)
     
     # 3. Aggiungi "id": None nella configurazione per nasconderla forzatamente
-    edited_df = st.data_editor(df_map_edit, num_rows="dynamic", use_container_width=True, hide_index=True,
+    edited_df = st.data_editor(df_map_edit, num_rows="dynamic", width='stretch', hide_index=True,
         column_config={
             "Elimina": st.column_config.CheckboxColumn(required=True),
             "isin": st.column_config.TextColumn("ISIN (Obbligatorio)", required=True),
@@ -105,7 +105,7 @@ def render_budget_tab(initial_balance_exists: bool):
             col_val.number_input("Importo", label_visibility="collapsed", key=f"movimento_{cat}", min_value=0.0, value=0.0, format="%.2f")
             col_note.text_input("Note", label_visibility="collapsed", key=f"nota_{cat}", placeholder="Nota opzionale...")
             st.divider()
-        if st.form_submit_button("💾 Salva Movimenti", type="primary", use_container_width=True):
+        if st.form_submit_button("💾 Salva Movimenti", type="primary", width='stretch'):
             rows_to_add = [{'date': pd.to_datetime(selected_date), 'type': f_type, 'category': cat, 'amount': st.session_state[f"movimento_{cat}"], 'note': st.session_state[f"nota_{cat}"] or ''} for cat in active_categories if st.session_state[f"movimento_{cat}"] > 0]
             if rows_to_add:
                 save_data(pd.DataFrame(rows_to_add), "budget", method='append')
@@ -119,7 +119,7 @@ def render_budget_tab(initial_balance_exists: bool):
         df_edit = df_budget_all.sort_values('date', ascending=False).copy()
         df_edit.insert(0, "Elimina", False)
         all_categories = sorted(list(set(CATEGORIE_ENTRATE_BASE + CATEGORIE_USCITE + ["Saldo Iniziale"])))
-        edited_budget = st.data_editor(df_edit, use_container_width=True, hide_index=True, num_rows="dynamic", key="budget_editor",
+        edited_budget = st.data_editor(df_edit, width='stretch', hide_index=True, num_rows="dynamic", key="budget_editor",
             column_config={
                 "Elimina": st.column_config.CheckboxColumn(required=True),
                 "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY", required=True),
@@ -258,7 +258,7 @@ def render_net_worth_tab():
     edited_nw = st.data_editor(
         df_nw_edit.sort_values('date', ascending=False), 
         num_rows="dynamic", 
-        use_container_width=True, 
+        width='stretch', 
         hide_index=True, 
         key="nw_editor",
         column_config={
@@ -309,7 +309,7 @@ def render_net_worth_tab():
     edited_goals = st.data_editor(
         df_goals_edit.sort_values('date'), 
         num_rows="dynamic", 
-        use_container_width=True, 
+        width='stretch', 
         hide_index=True, 
         key="goal_editor",
         column_config={

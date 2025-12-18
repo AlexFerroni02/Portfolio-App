@@ -49,6 +49,8 @@ COUNTRY_ALIASES_IT = {
     "filippine": "Philippines",
     "emirati arabi uniti": "United Arab Emirates",
     "arabia saudita": "Saudi Arabia",
+    "United Arab Emirates": "United Arab Emirates",
+    "saudi arabia": "Saudi Arabia",
     "israele": "Israel",
     "turchia": "Turkey",
     
@@ -67,6 +69,7 @@ COUNTRY_ALIASES_IT = {
     # Africa
     "sudafrica": "South Africa",
     "sud africa": "South Africa",
+    "repubblica sudafricana": "South Africa",
     "egitto": "Egypt",
     "nigeria": "Nigeria",
     "marocco": "Morocco",
@@ -266,7 +269,7 @@ def render_geo_map(geo_dict: dict, value_type: str = "euro", toggle_key: str = "
             marker_line_color="rgba(255,255,255,0.2)"
         )
     
-    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
 
 def plot_allocation_pie(data: Dict[str, float], title: str) -> go.Figure:
     """

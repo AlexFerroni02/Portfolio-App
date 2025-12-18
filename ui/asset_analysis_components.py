@@ -299,7 +299,7 @@ def render_price_history(ticker: str, asset_prices: pd.DataFrame):
     if not asset_prices.empty:
         fig = px.line(asset_prices, x='date', y='close_price', title=f"Andamento {ticker}")
         fig.update_traces(line_color='#00CC96')
-        st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+        st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
     else:
         st.info("Nessuna informazione sullo storico prezzi per questo asset.")
 
@@ -316,6 +316,6 @@ def render_transactions_table(df_asset_trans: pd.DataFrame):
             'fees': "€ {:.2f}", 
             'date': lambda x: x.strftime('%d-%m-%Y')
         }),
-        use_container_width=True,
+        width='stretch',
         hide_index=True
     )
