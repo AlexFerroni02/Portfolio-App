@@ -5,22 +5,7 @@ import plotly.graph_objects as go
 import json
 from typing import Optional
 from ui.components import style_chart_for_mobile, color_pnl
-from ui.charts import render_geo_map
-
-
-# Le costanti e funzioni per la mappa geografica sono ora in ui/charts.py
-# Manteniamo qui solo un riferimento per retrocompatibilità se necessario
-from ui.charts import COUNTRY_ALIASES_IT as _COUNTRY_ALIASES_IT_UNUSED
-
-
-# Ora usiamo render_geo_map da ui/charts.py
-def _render_geo_map_globe(geo_dict: dict):
-    """
-    DEPRECATED: Usa render_geo_map da ui.charts invece.
-    Manteniamo questo wrapper per retrocompatibilità.
-    """
-    render_geo_map(geo_dict, value_type="euro", toggle_key="map_projection_toggle")
-
+from ui.charts import render_geo_map, plot_portfolio_history
 
 
 def render_kpis(assets_view: pd.DataFrame):
@@ -36,11 +21,273 @@ def render_kpis(assets_view: pd.DataFrame):
     st.divider()
 
 
+def _render_asset_class_pie(full_view: pd.DataFrame, color_map: dict):
+    """Renderizza il grafico a torta della composizione per asset class."""
+    composition_data = full_view.groupby('category')['mkt_val'].sum().reset_index()
+    composition_data['percent'] = composition_data['mkt_val'] / composition_data['mkt_val'].sum() * 100
+    
+    fig_cat = go.Figure()
+    
+    fig_cat.add_trace(go.Pie(
+        labels=composition_data['category'],
+        values=composition_data['mkt_val'],
+        hole=0.5,
+        marker=dict(
+            colors=[color_map.get(cat) for cat in composition_data['category']],
+            line=dict(color='#1e1e1e', width=4)
+        ),
+        direction='clockwise',
+        rotation=270,
+        textinfo='percent',
+        textfont=dict(size=16, color='#ffffff'),
+        hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
+        domain={'x': [0, 1], 'y': [0, 1]}
+    ))
+    
+    total = composition_data['mkt_val'].sum()
+    fig_cat.add_annotation(
+        text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b>",
+        x=0.5, y=0.5,
+        font=dict(family='Arial Black'),
+        showarrow=False
+    )
+    
+    fig_cat.update_layout(
+        title=dict(text='💼 Composizione Portfolio', font=dict(size=18, color='#ffffff')),
+        showlegend=True,
+        height=650,
+        font=dict(size=20, color='#e8e8e8'),
+        paper_bgcolor='#0e1117',
+        plot_bgcolor='#0e1117',
+        legend=dict(
+            font=dict(color='#e8e8e8'),
+            bgcolor='rgba(30,30,30,0.5)',
+            bordercolor='#333333',
+            borderwidth=1
+        )
+    )
+    
+    st.plotly_chart(style_chart_for_mobile(fig_cat), use_container_width=True)
+
+
+def _render_sunburst_chart(full_view: pd.DataFrame, color_map: dict):
+    """Renderizza il grafico sunburst per macro categorie e asset."""
+    categories_to_show = ['Azionario', 'Obbligazionario', 'Gold']
+    plot_df = full_view[(full_view['mkt_val'] > 0) & (full_view['category'].isin(categories_to_show))].copy()
+    
+    if plot_df.empty:
+        st.info("Nessun asset da mostrare per il grafico sunburst.")
+        return
+
+    def extract_ticker(ticker):
+        return str(ticker).split('.')[0] if pd.notna(ticker) else 'N/A'
+    
+    plot_df['ticker_short'] = plot_df['ticker'].apply(extract_ticker)
+    plot_df = plot_df.sort_values(['category', 'mkt_val'], ascending=[True, False])
+    
+    blue_scale = px.colors.sequential.Blues
+    red_scale = px.colors.sequential.Reds
+    gold_transparent = 'rgba(212,175,55,0.6)'
+    
+    labels, parents, values, colors_list = [], [], [], []
+    
+    root_val = plot_df['mkt_val'].sum()
+    labels.append(f'€{root_val:,.0f}')
+    parents.append('')
+    values.append(root_val)
+    colors_list.append('#0e1117')
+    
+    for cat in plot_df['category'].unique():
+        labels.append(cat)
+        parents.append(labels[0])
+        cat_df = plot_df[plot_df['category'] == cat]
+        cat_val = cat_df['mkt_val'].sum()
+        values.append(cat_val)
+        colors_list.append(color_map.get(cat, '#9CA3AF'))
+        
+        cat_df = cat_df.reset_index(drop=True)
+        n_assets = len(cat_df)
+        
+        for idx, row in cat_df.iterrows():
+            labels.append(row['ticker_short'])
+            parents.append(cat)
+            values.append(row['mkt_val'])
+            
+            color_intensity = (n_assets - idx - 1) / (n_assets - 1) if n_assets > 1 else 1.0
+            
+            if cat == 'Azionario':
+                color_idx = min(int(color_intensity * 5) + 3, len(blue_scale) - 1)
+                colors_list.append(blue_scale[color_idx])
+            elif cat == 'Obbligazionario':
+                color_idx = min(int(color_intensity * 5) + 3, len(red_scale) - 1)
+                colors_list.append(red_scale[color_idx])
+            elif cat == 'Gold':
+                colors_list.append(gold_transparent)
+            else:
+                colors_list.append('#9CA3AF')
+
+    fig_sunburst = go.Figure(go.Sunburst(
+        labels=labels,
+        parents=parents,
+        values=values,
+        marker=dict(colors=colors_list, line=dict(color='#1e1e1e', width=2)),
+        textinfo='label+percent root',
+        textfont=dict(size=16, color='#ffffff'),
+        hovertemplate='<b>%{label}</b><br>€%{value:,.2f}<extra></extra>',
+        branchvalues='total'
+    ))
+    
+    fig_sunburst.update_layout(
+        title=dict(text='📊 Macro Categorie e Asset', font=dict(size=18, color='#ffffff')),
+        height=650,
+        margin=dict(l=10, r=10, t=80, b=10),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(size=13, color='#e8e8e8'),
+        legend=dict(
+            orientation='h', yanchor='top', y=1.02, xanchor='center', x=0.5,
+            bgcolor='rgba(30,30,30,0.5)', bordercolor='#333333', borderwidth=1,
+            font=dict(size=12, color='#e8e8e8')
+        )
+    )
+    st.plotly_chart(style_chart_for_mobile(fig_sunburst), use_container_width=True)
+
+
+def _render_detail_pie_chart(full_view: pd.DataFrame, category: str, color_scale: list, title: str):
+    """Funzione generica per renderizzare grafici a torta di dettaglio."""
+    df_category = full_view[full_view['category'] == category].copy()
+    if df_category.empty:
+        st.info(f"Nessun asset {category.lower()} in portafoglio.")
+        return
+
+    df_category = df_category.sort_values('mkt_val', ascending=False)
+    
+    def extract_ticker(ticker):
+        return str(ticker).split('.')[0] if pd.notna(ticker) else 'N/A'
+    
+    df_category['ticker_short'] = df_category['ticker'].apply(extract_ticker)
+    total = df_category['mkt_val'].sum()
+    
+    n = len(df_category)
+    colors = []
+    for idx in range(n):
+        color_intensity = (n - idx - 1) / (n - 1) if n > 1 else 1.0
+        color_idx = min(int(color_intensity * 5) + 3, len(color_scale) - 1)
+        colors.append(color_scale[color_idx])
+
+    fig = go.Figure(go.Pie(
+        labels=df_category['ticker_short'],
+        values=df_category['mkt_val'],
+        hole=0.5,
+        marker=dict(colors=colors, line=dict(color='#1e1e1e', width=2)),
+        direction='clockwise',
+        rotation=270,
+        textinfo='label+percent',
+        texttemplate='<b>%{label}</b><br>%{percent}',
+        textfont=dict(size=16, color='#ffffff'),
+        hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>'
+    ))
+    
+    fig.add_annotation(
+        text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b>",
+        x=0.5, y=0.5, font=dict(family='Arial Black'), showarrow=False
+    )
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=18, color='#ffffff')),
+        showlegend=False,
+        height=650,
+        paper_bgcolor='#0e1117',
+        plot_bgcolor='#0e1117'
+    )
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+def _render_xray_allocation_tab(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
+    """Renderizza il tab con l'analisi X-Ray (geografica e settoriale)."""
+    st.caption("Questa analisi mostra l'esposizione geografica e settoriale aggregata, pesata per il valore di ogni asset.")
+    view_alloc = full_view.merge(df_alloc, on='ticker', how='left') if not df_alloc.empty else full_view.copy()
+    total_val = view_alloc['mkt_val'].sum()
+    
+    if total_val <= 0:
+        st.warning("Il valore del portafoglio è zero o i prezzi non sono aggiornati.")
+        return
+
+    total_geo, total_sec = {}, {}
+    for _, row in view_alloc.iterrows():
+        val_etf = row['mkt_val']
+        if val_etf == 0 or pd.isna(val_etf):
+            continue
+        
+        try:
+            geo_raw = row.get('geography_json', '{}')
+            sec_raw = row.get('sector_json', '{}')
+            g_map = geo_raw if isinstance(geo_raw, dict) else json.loads(geo_raw or '{}')
+            s_map = sec_raw if isinstance(sec_raw, dict) else json.loads(sec_raw or '{}')
+        except (json.JSONDecodeError, TypeError):
+            continue
+        
+        for country, perc in g_map.items():
+            total_geo[country] = total_geo.get(country, 0) + (val_etf * (float(perc) / 100))
+        for sector, perc in s_map.items():
+            total_sec[sector] = total_sec.get(sector, 0) + (val_etf * (float(perc) / 100))
+
+    c_geo, c_sec = st.columns(2)
+    
+    with c_geo:
+        _render_xray_card("🌍 Esposizione Geografica", "Principali Paesi", total_geo, "geo_view_mode_dashboard", "#7FDBFF", "linear-gradient(90deg,#00c9ff,#92fe9d)")
+    
+    with c_sec:
+        _render_xray_card("🧬 Esposizione Settoriale", "Distribuzione per settore", total_sec, "sec_view_mode_dashboard", "#FFDC73", "linear-gradient(90deg,#FFD166,#F77F00)", has_map=False)
+
+
+def _render_xray_card(title: str, subtitle: str, data: dict, key: str, text_color: str, bar_gradient: str, has_map: bool = True):
+    """Renderizza una card per l'analisi X-Ray (geografica o settoriale)."""
+    st.markdown(f"""
+        <div style="padding:1rem 1.2rem; border-radius:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); height: 100%;">
+            <h3 style="margin-top:0;margin-bottom:0.5rem;">{title}</h3>
+            <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">{subtitle}</p>
+    """, unsafe_allow_html=True)
+
+    if not data:
+        st.info("Nessun dato disponibile. Vai su 'Gestione Dati' per scaricarlo.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    view_options = ["Barre", "Mappa"] if has_map else ["Barre"]
+    view_mode = st.radio("Vista", view_options, horizontal=True, key=key, label_visibility="collapsed") if len(view_options) > 1 else "Barre"
+    
+    if not has_map:
+        st.markdown("<div style='height:38px;'></div>", unsafe_allow_html=True) # Spacer per allineamento
+
+    if view_mode == "Barre":
+        df = pd.DataFrame(list(data.items()), columns=["Item", "Valore"]).sort_values("Valore", ascending=False)
+        total_sum = df["Valore"].sum()
+        df["Percentuale"] = (df["Valore"] / total_sum * 100) if total_sum > 0 else 0
+        max_val = df["Percentuale"].max()
+        
+        for _, row in df.head(10).iterrows(): # Mostra solo i top 10
+            bar_width = int((row["Percentuale"] / max_val) * 100) if max_val > 0 else 0
+            st.markdown(f"""
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style='font-weight:600;'>{row['Item']}</span>
+                    <span style='color:{text_color};'>{row['Percentuale']:.2f}%</span>
+                </div>
+                <div style="background-color:#222; border-radius:4px; width:100%; height:6px; margin-top:2px; margin-bottom:10px;">
+                    <div style="background:{bar_gradient}; width:{bar_width}%; height:6px; border-radius:4px;"></div>
+                </div>
+            """, unsafe_allow_html=True)
+    elif view_mode == "Mappa":
+         render_geo_map(data, value_type="euro", toggle_key="map_projection_toggle_dashboard")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
     """Renderizza i tab con i grafici di composizione (inclusa liquidità)."""
     st.subheader("🔬 Analisi Composizione Portafoglio")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tabs = st.tabs([
         "Asset Class", 
         "Macro + Dettaglio Asset", 
         "Dettaglio Azionario", 
@@ -56,524 +303,30 @@ def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
         'Altro': '#9CA3AF'
     }
     
-    with tab1:
-        composition_data = full_view.groupby('category')['mkt_val'].sum().reset_index()
-        composition_data['percent'] = composition_data['mkt_val'] / composition_data['mkt_val'].sum() * 100
-        
-        fig_cat = go.Figure()
-        
-        fig_cat.add_trace(go.Pie(
-            labels=composition_data['category'],
-            values=composition_data['mkt_val'],
-            hole=0.5,
-            marker=dict(
-                colors=[color_map.get(cat) for cat in composition_data['category']],
-                line=dict(color='#1e1e1e', width=4)  # Bordo scuro
-            ),
-            direction='clockwise',
-            rotation=270,
-            textinfo='percent',
-            textfont=dict(size=16, color='#ffffff'),  # Testo chiaro
-            hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
-            domain={'x': [0, 1], 'y': [0, 1]}
-        ))
-        
-        # Valore totale al centro
-        total = composition_data['mkt_val'].sum()
-        fig_cat.add_annotation(
-            text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b>",
-            x=0.5, y=0.5,
-            font=dict(family='Arial Black'),
-            showarrow=False
+    with tabs[0]:
+        _render_asset_class_pie(full_view, color_map)
+    
+    with tabs[1]:
+        _render_sunburst_chart(full_view, color_map)
+    
+    with tabs[2]:
+        _render_detail_pie_chart(
+            full_view, 
+            category='Azionario', 
+            color_scale=px.colors.sequential.Blues, 
+            title='📈 Dettaglio Sezione Azionaria'
         )
-        
-        fig_cat.update_layout(
-            title=dict(
-                text='💼 Composizione Portfolio',
-                font=dict(size=18, color='#ffffff')
-            ),
-            showlegend=True,
-            height=650,
-            font=dict(size=20, color='#e8e8e8'),
-            paper_bgcolor='#0e1117',  # Sfondo dark Streamlit
-            plot_bgcolor='#0e1117',
-            legend=dict(
-                font=dict(color='#e8e8e8'),
-                bgcolor='rgba(30,30,30,0.5)',
-                bordercolor='#333333',
-                borderwidth=1
-            )
+    
+    with tabs[3]:
+        _render_detail_pie_chart(
+            full_view, 
+            category='Obbligazionario', 
+            color_scale=px.colors.sequential.Reds, 
+            title='📉 Dettaglio Sezione Obbligazionaria'
         )
-        
-        st.plotly_chart(style_chart_for_mobile(fig_cat), width='stretch')
-
-
     
-    with tab2:
-        
-        categories_to_show = ['Azionario', 'Obbligazionario', 'Gold']
-        plot_df = full_view[full_view['mkt_val'] > 0].copy()
-        plot_df = plot_df[plot_df['category'].isin(categories_to_show)]
-        
-        if not plot_df.empty:
-            # Funzione per estrarre ticker senza suffisso
-            def extract_ticker(ticker):
-                if pd.isna(ticker):
-                    return 'N/A'
-                ticker_str = str(ticker)
-                return ticker_str.split('.')[0]
-            
-            plot_df['ticker_short'] = plot_df['ticker'].apply(extract_ticker)
-            plot_df = plot_df.sort_values(['category', 'mkt_val'], ascending=[True, False])
-            
-            # Gradazioni di colore
-            import plotly.colors as pc
-            blue_scale = pc.sequential.Blues
-            red_scale = pc.sequential.Reds
-            gold_base = color_map['Gold']
-            gold_transparent = 'rgba(212,175,55,0.6)'
-            
-            # Liste per i dati del sunburst
-            labels = []
-            parents = []
-            values = []
-            colors_list = []
-            
-            # Prepara i dati per il sunburst
-            # Mostra il Sunburst completo con percentuali globali
-            # Prepara i dati per il sunburst
-            root_val = plot_df['mkt_val'].sum()
-            labels = [f'€{root_val:,.0f}']
-            parents = ['']
-            values = [root_val]
-            colors_list = ['#0e1117']
-            
-            # Aggiungi categorie e asset con colori graduati
-            for cat in plot_df['category'].unique():
-                # Aggiungi categoria
-                labels.append(cat)
-                parents.append(labels[0])
-                cat_df = plot_df[plot_df['category'] == cat].copy()
-                cat_val = cat_df['mkt_val'].sum()
-                values.append(cat_val)
-                colors_list.append(color_map.get(cat, '#9CA3AF'))
-                
-                # Calcola gradazioni per gli asset di questa categoria
-                cat_df = cat_df.reset_index(drop=True)
-                n_assets = len(cat_df)
-                
-                for idx, (_, row) in enumerate(cat_df.iterrows()):
-                    labels.append(row['ticker_short'])
-                    parents.append(cat)
-                    values.append(row['mkt_val'])
-                    
-                    # Calcola indice colore basato sulla posizione (più alto = più scuro)
-                    if n_assets > 1:
-                        color_intensity = (n_assets - idx - 1) / (n_assets - 1)
-                    else:
-                        color_intensity = 1.0
-                    
-                    if cat == 'Azionario':
-                        color_idx = min(int(color_intensity * 5) + 3, 8)
-                        colors_list.append(blue_scale[color_idx])
-                    elif cat == 'Obbligazionario':
-                        color_idx = min(int(color_intensity * 5) + 3, 8)
-                        colors_list.append(red_scale[color_idx])
-                    elif cat == 'Gold':
-                        colors_list.append(gold_transparent)
-                    else:
-                        colors_list.append('#9CA3AF')
-            
-            fig_sunburst = go.Figure(go.Sunburst(
-                labels=labels,
-                parents=parents,
-                values=values,
-                marker=dict(
-                    colors=colors_list,
-                    line=dict(color='#1e1e1e', width=2)
-                ),
-                textinfo='label+percent root',
-                textfont=dict(size=16, color='#ffffff'),
-                hovertemplate='<b>%{label}</b><br>€%{value:,.2f}<extra></extra>',
-                branchvalues='total'
-            ))
-            
-            # Aggiungi legenda manuale per le categorie
-            for cat in ['Azionario', 'Obbligazionario', 'Gold']:
-                if cat in plot_df['category'].unique():
-                    fig_sunburst.add_trace(go.Scatter(
-                        x=[None], y=[None],
-                        mode='markers',
-                        marker=dict(size=12, color=color_map.get(cat, '#9CA3AF')),
-                        legendgroup=cat,
-                        showlegend=True,
-                        name=cat,
-                        hoverinfo='skip'
-                    ))
-            
-            fig_sunburst.update_layout(
-                title=dict(
-                    text='📊 Macro Categorie e Asset',
-                    font=dict(size=18, color='#ffffff')
-                ),
-                height=650,
-                margin=dict(l=10, r=10, t=80, b=10),
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(size=13, color='#e8e8e8'),
-                showlegend=True,
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                legend=dict(
-                    orientation='h',
-                    yanchor='top',
-                    y=1.02,
-                    xanchor='center',
-                    x=0.5,
-                    bgcolor='rgba(30,30,30,0.5)',
-                    bordercolor='#333333',
-                    borderwidth=1,
-                    font=dict(size=12, color='#e8e8e8')
-                )
-            )
-            
-            st.plotly_chart(style_chart_for_mobile(fig_sunburst), width='stretch')
-
-        else:
-            st.info("Nessun asset da mostrare.")
-    
-    with tab3:
-        df_azionario = full_view[full_view['category'] == 'Azionario'].copy()
-        if not df_azionario.empty:
-            df_azionario = df_azionario.sort_values('mkt_val', ascending=False)
-            
-            # Funzione per estrarre ticker senza suffisso
-            def extract_ticker(ticker):
-                if pd.isna(ticker):
-                    return 'CASH'
-                ticker_str = str(ticker)
-                if ticker_str.lower() in ['cash', 'liquidità', 'liquidita']:
-                    return 'CASH'
-                return ticker_str.split('.')[0]
-            
-            df_azionario['ticker_short'] = df_azionario['ticker'].apply(extract_ticker)
-            df_azionario['label'] = df_azionario['ticker_short']
-            
-            total = df_azionario['mkt_val'].sum()
-            
-            # Calcola percentuali per gradiente di colore
-            df_azionario['pct'] = (df_azionario['mkt_val'] / total) * 100
-            
-            # Crea gradienti di blu basati sulla posizione (come nel Sunburst di tab2)
-            n = len(df_azionario)
-            colors = []
-            for idx in range(n):
-                if n > 1:
-                    color_intensity = (n - idx - 1) / (n - 1)
-                else:
-                    color_intensity = 1.0
-                color_idx = min(int(color_intensity * 5) + 3, 8)
-                colors.append(blue_scale[color_idx])
-            
-            # Override colore per UST (grigio come in tab2)
-            for i, row in enumerate(df_azionario.iterrows()):
-                if row[1]['ticker_short'] == 'UST':
-                    colors[i] = '#9CA3AF'
-            
-            fig = go.Figure()
-            
-            fig.add_trace(go.Pie(
-                labels=df_azionario['label'],
-                values=df_azionario['mkt_val'],
-                hole=0.5,
-                marker=dict(
-                    colors=colors,
-                    line=dict(color='#1e1e1e', width=2)
-                ),
-                direction='clockwise',
-                rotation=270,
-                textinfo='label+percent',
-                texttemplate='<b>%{label}</b><br>%{percent}',
-                textfont=dict(size=16, color='#ffffff'),  # Testo bianco e più grande
-                hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
-                domain={'x': [0, 1], 'y': [0, 1]}
-            ))
-            
-            fig.add_annotation(
-                text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b>",
-                x=0.5, y=0.5,
-                font=dict(family='Arial Black'),
-                showarrow=False
-            )
-            
-            fig.update_layout(
-                title=dict(
-                    text='📈 Dettaglio Sezione Azionaria',
-                    font=dict(size=18, color='#ffffff')
-                ),
-                showlegend=True,
-                height=650,
-                font=dict(size=12, color='#e8e8e8'),
-                paper_bgcolor='#0e1117',
-                plot_bgcolor='#0e1117',
-                legend=dict(
-                    font=dict(color='#e8e8e8'),
-                    bgcolor='rgba(30,30,30,0.5)',
-                    bordercolor='#333333',
-                    borderwidth=1
-                )
-            )
-            
-            st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
-        else:
-            st.info("Nessun asset azionario in portafoglio.")
-    
-    with tab4:
-        df_obbligazionario = full_view[full_view['category'] == 'Obbligazionario'].copy()
-        if not df_obbligazionario.empty:
-            df_obbligazionario = df_obbligazionario.sort_values('mkt_val', ascending=False)
-            
-            # Funzione per estrarre ticker senza suffisso
-            def extract_ticker(ticker):
-                if pd.isna(ticker):
-                    return 'CASH'
-                ticker_str = str(ticker)
-                if ticker_str.lower() in ['cash', 'liquidità', 'liquidita']:
-                    return 'CASH'
-                return ticker_str.split('.')[0]
-            
-            df_obbligazionario['ticker_short'] = df_obbligazionario['ticker'].apply(extract_ticker)
-            df_obbligazionario['label'] = df_obbligazionario['ticker_short']
-            
-            total = df_obbligazionario['mkt_val'].sum()
-            
-            # Calcola percentuali per gradiente di colore
-            df_obbligazionario['pct'] = (df_obbligazionario['mkt_val'] / total) * 100
-            
-            # Crea gradienti di rosso basati sulla percentuale (più scuro = più alta)
-            import plotly.colors
-            red_scale = plotly.colors.sequential.Reds
-            n = len(df_obbligazionario)
-            # Inverti per avere il più scuro per i valori più alti
-            colors = [red_scale[min(int((pct / df_obbligazionario['pct'].max()) * (len(red_scale) - 1)), len(red_scale) - 1)] 
-                     for pct in df_obbligazionario['pct']]
-            
-            fig = go.Figure()
-            
-            fig.add_trace(go.Pie(
-                labels=df_obbligazionario['label'],
-                values=df_obbligazionario['mkt_val'],
-                hole=0.5,
-                marker=dict(
-                    colors=colors,
-                    line=dict(color='#1e1e1e', width=2)
-                ),
-                direction='clockwise',
-                rotation=270,
-                textinfo='label+percent',
-                texttemplate='<b>%{label}</b><br>%{percent}',
-                textfont=dict(size=16, color='#ffffff'),
-                hovertemplate='%{label}<br>€%{value:,.2f}<br>%{percent}<extra></extra>',
-                domain={'x': [0, 1], 'y': [0, 1]}
-            ))
-            
-            fig.add_annotation(
-                text=f"<b style='font-size:24px; color:#ffffff'>€{total:,.0f}</b>",
-                x=0.5, y=0.5,
-                font=dict(family='Arial Black'),
-                showarrow=False
-            )
-            
-            fig.update_layout(
-                title=dict(
-                    text='📉 Dettaglio Sezione Obbligazionaria',
-                    font=dict(size=18, color='#ffffff')
-                ),
-                showlegend=True,
-                height=650,
-                font=dict(size=12, color='#e8e8e8'),
-                paper_bgcolor='#0e1117',
-                plot_bgcolor='#0e1117',
-                legend=dict(
-                    font=dict(color='#e8e8e8'),
-                    bgcolor='rgba(30,30,30,0.5)',
-                    bordercolor='#333333',
-                    borderwidth=1
-                )
-            )
-            
-            st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
-        else:
-            st.info("Nessun asset obbligazionario in portafoglio.")
-    
-    with tab5:
-        st.caption("Questa analisi mostra l'esposizione geografica e settoriale aggregata, pesata per il valore di ogni asset.")
-        view_alloc = full_view.merge(df_alloc, on='ticker', how='left') if not df_alloc.empty else full_view.copy()
-        total_val = view_alloc['mkt_val'].sum()
-        
-        if total_val > 0:
-            total_geo, total_sec = {}, {}
-            
-            for _, row in view_alloc.iterrows():
-                val_etf = row['mkt_val']
-                if val_etf == 0 or pd.isna(val_etf):
-                    continue
-                
-                try:
-                    geo_raw = row.get('geography_json', '{}')
-                    sec_raw = row.get('sector_json', '{}')
-                    g_map = geo_raw if isinstance(geo_raw, dict) else json.loads(geo_raw or '{}')
-                    s_map = sec_raw if isinstance(sec_raw, dict) else json.loads(sec_raw or '{}')
-                except (json.JSONDecodeError, TypeError):
-                    g_map, s_map = {}, {}
-                
-                for country, perc in g_map.items():
-                    euro_exposure = val_etf * (float(perc) / 100)
-                    total_geo[country] = total_geo.get(country, 0) + euro_exposure
-                
-                for sector, perc in s_map.items():
-                    euro_exposure = val_etf * (float(perc) / 100)
-                    total_sec[sector] = total_sec.get(sector, 0) + euro_exposure
-            
-            c_geo, c_sec = st.columns(2)
-            
-            # ---------- CARD GEOGRAFICA ----------
-            with c_geo:
-                st.markdown(
-                    """
-                    <div style="
-                        padding:1rem 1.2rem;
-                        border-radius:12px;
-                        background:rgba(255,255,255,0.03);
-                        border:1px solid rgba(255,255,255,0.06);
-                        ">
-                      <h3 style="margin-top:0;margin-bottom:0.5rem;">🌍 Esposizione Geografica</h3>
-                      <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
-                        Principali Paesi in portafoglio.
-                      </p>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                
-                if total_geo:
-                    df_g = pd.DataFrame(list(total_geo.items()), columns=["Paese", "Valore"])
-                    df_g = df_g.sort_values("Valore", ascending=False)
-                    total_geo_sum = df_g["Valore"].sum()
-                    df_g["Percentuale"] = (df_g["Valore"] / total_geo_sum * 100) if total_geo_sum > 0 else 0
-                    max_val_g = df_g["Percentuale"].max()
-                    
-                    # Toggle Barre/Mappa dentro la card
-                    view_mode_geo = st.radio(
-                        "Vista",
-                        ["Barre", "Mappa"],
-                        horizontal=True,
-                        key="geo_view_mode_dashboard",
-                        label_visibility="collapsed"
-                    )
-                    
-                    if view_mode_geo == "Barre":
-                        # Vista a barre
-                        for _, row in df_g.iterrows():
-                            bar_width = int((row["Percentuale"] / max_val_g) * 100)
-                            
-                            left, right = st.columns([3, 1])
-                            with left:
-                                st.markdown(
-                                    f"<span style='font-weight:600;'>{row['Paese']}</span>",
-                                    unsafe_allow_html=True,
-                                )
-                            with right:
-                                st.markdown(
-                                    f"<span style='float:right;color:#7FDBFF;'>{row['Percentuale']:.2f}%</span>",
-                                    unsafe_allow_html=True,
-                                )
-                            
-                            st.markdown(
-                                f"""
-                                <div style="background-color:#222;border-radius:4px;
-                                            width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
-                                    <div style="
-                                        background:linear-gradient(90deg,#00c9ff,#92fe9d);
-                                        width:{bar_width}%;
-                                        height:6px;
-                                        border-radius:4px;">
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        # Vista mappa mondo
-                        _render_geo_map_globe(total_geo)
-                else:
-                    st.info("Nessun dato geografico. Vai su 'Gestione Dati' per scaricarlo.")
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-            
-            # ---------- CARD SETTORIALE (solo barre) ----------
-            with c_sec:
-                st.markdown(
-                    """
-                    <div style="
-                        padding:1rem 1.2rem;
-                        border-radius:12px;
-                        background:rgba(255,255,255,0.03);
-                        border:1px solid rgba(255,255,255,0.06);
-                        ">
-                      <h3 style="margin-top:0;margin-bottom:0.5rem;">🧬 Esposizione Settoriale</h3>
-                      <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
-                        Distribuzione per settore.
-                      </p>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                
-                if total_sec:
-                    # Spazio per allineare con il toggle della colonna geografica
-                    st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
-                    
-                    df_s = pd.DataFrame(list(total_sec.items()), columns=["Settore", "Valore"])
-                    df_s = df_s.sort_values("Valore", ascending=False)
-                    total_sec_sum = df_s["Valore"].sum()
-                    df_s["Percentuale"] = (df_s["Valore"] / total_sec_sum * 100) if total_sec_sum > 0 else 0
-                    max_val_s = df_s["Percentuale"].max()
-                    
-                    for _, row in df_s.iterrows():
-                        bar_width = int((row["Percentuale"] / max_val_s) * 100)
-                        
-                        left, right = st.columns([3, 1])
-                        with left:
-                            st.markdown(
-                                f"<span style='font-weight:600;'>{row['Settore']}</span>",
-                                unsafe_allow_html=True,
-                            )
-                        with right:
-                            st.markdown(
-                                f"<span style='float:right;color:#FFDC73;'>{row['Percentuale']:.2f}%</span>",
-                                unsafe_allow_html=True,
-                            )
-                        
-                        st.markdown(
-                            f"""
-                            <div style="background-color:#222;border-radius:4px;
-                                        width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
-                                <div style="
-                                    background:linear-gradient(90deg,#FFD166,#F77F00);
-                                    width:{bar_width}%;
-                                    height:6px;
-                                    border-radius:4px;">
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.info("Nessun dato settoriale. Vai su 'Gestione Dati' per scaricarlo.")
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.warning("Il valore del portafoglio è zero o i prezzi non sono aggiornati.")
-
+    with tabs[4]:
+        _render_xray_allocation_tab(full_view, df_alloc)
 
 def render_assets_table(full_view: pd.DataFrame):
     """Renderizza la tabella con il dettaglio degli asset e gestisce la selezione."""
@@ -610,20 +363,9 @@ def render_historical_chart(hdf: pd.DataFrame):
     st.subheader("📉 Andamento Temporale")
     
     if not hdf.empty:
-        fig_hist = go.Figure()
-        fig_hist.add_trace(go.Scatter(
-            x=hdf['Data'], 
-            y=hdf['Valore'], 
-            fill='tozeroy', 
-            name='Valore Attuale', 
-            line_color='#00CC96'
-        ))
-        fig_hist.add_trace(go.Scatter(
-            x=hdf['Data'], 
-            y=hdf['Investito'], 
-            name='Soldi Versati', 
-            line=dict(color='#EF553B', dash='dash')
-        ))
-        st.plotly_chart(style_chart_for_mobile(fig_hist), width='stretch')
+        # SOSTITUITO: Il vecchio 'go.Figure(...)' è stato rimpiazzato da questa chiamata.
+        fig_hist = plot_portfolio_history(hdf)
+        if fig_hist:
+            st.plotly_chart(fig_hist, use_container_width=True)
     else:
         st.info("Dati insufficienti per il grafico storico.")

@@ -5,79 +5,6 @@ from typing import List, Dict, Any, Optional
 from ui.components import style_chart_for_mobile
 from ui.charts import render_geo_map, plot_price_history
 
-
-# Le costanti e funzioni per la mappa geografica sono ora in ui/charts.py
-# Manteniamo qui solo un riferimento per retrocompatibilità se necessario
-from ui.charts import COUNTRY_ALIASES_IT as _COUNTRY_ALIASES_IT_UNUSED
-
-_COUNTRY_ALIASES_IT_OLD = {
-    # Nord America
-    "stati uniti": "United States",
-    "canada": "Canada",
-    "messico": "Mexico",
-    
-    # Europa
-    "regno unito": "United Kingdom",
-    "paesi bassi": "Netherlands",
-    "germania": "Germany",
-    "francia": "France",
-    "svizzera": "Switzerland",
-    "irlanda": "Ireland",
-    "belgio": "Belgium",
-    "italia": "Italy",
-    "spagna": "Spain",
-    "austria": "Austria",
-    "finlandia": "Finland",
-    "portogallo": "Portugal",
-    "grecia": "Greece",
-    "norvegia": "Norway",
-    "svezia": "Sweden",
-    "danimarca": "Denmark",
-    "polonia": "Poland",
-    
-    # Asia
-    "giappone": "Japan",
-    "cina": "China",
-    "india": "India",
-    "taiwan": "Taiwan",
-    "corea del sud": "Korea, Republic of",
-    "corea del nord": "Korea, Democratic People's Republic of",
-    "singapore": "Singapore",
-    "hong kong": "Hong Kong",
-    "indonesia": "Indonesia",
-    "malesia": "Malaysia",
-    "thailandia": "Thailand",
-    "vietnam": "Vietnam",
-    "filippine": "Philippines",
-    "emirati arabi uniti": "United Arab Emirates",
-    "arabia saudita": "Saudi Arabia",
-    "israele": "Israel",
-    "turchia": "Turkey",
-    
-    # Oceania
-    "australia": "Australia",
-    "nuova zelanda": "New Zealand",
-    
-    # Sud America
-    "brasile": "Brazil",
-    "argentina": "Argentina",
-    "cile": "Chile",
-    "colombia": "Colombia",
-    "perù": "Peru",
-    "venezuela": "Venezuela",
-    
-    # Africa
-    "sudafrica": "South Africa",
-    "sud africa": "South Africa",
-    "egitto": "Egypt",
-    "nigeria": "Nigeria",
-    "marocco": "Morocco",
-    
-    # Russia
-    "russia": "Russian Federation",
-}  # Mantenuto per retrocompatibilità, ma non più usato
-
-
 # ========== COMPONENTI UI ==========
 
 def render_asset_selector(asset_options: List[str]) -> str:
@@ -121,25 +48,93 @@ def render_asset_kpis(kpi_data: Dict[str, Any]):
     c4.metric("P&L", f"€ {kpi_data.get('pnl', 0):,.2f}", delta=f"{kpi_data.get('pnl_perc', 0):.2f}%")
     st.divider()
 
-
-# ========== MAPPA GEOGRAFICA (ORA MODULARE) ==========
-
-def render_geo_map_folium(geo_data: dict):
+"""
+    Mostra composizione asset con:
+    - colonna sinistra: Paesi (toggle Barre / Mappa mondo)
+    - colonna destra: Settori (liste con mini-barre)
     """
-    DEPRECATED: Usa render_geo_map da ui.charts invece.
-    Manteniamo questo wrapper per retrocompatibilità.
-    geo_data: {nome_paese_IT: percentuale}
-    """
-    render_geo_map(geo_data, value_type="percent", toggle_key="map_projection_toggle_asset")
 
 
 # ========== COMPOSIZIONE ASSET (BARRE + MAPPA) ==========
 
+def _render_single_allocation_card(
+    title: str,
+    subtitle: str,
+    data: dict,
+    text_color: str,
+    bar_gradient: str,
+    show_map_toggle: bool = False,
+    map_toggle_key: str = "geo_view_mode"
+):
+    """
+    Funzione helper riutilizzabile per renderizzare una card di allocazione
+    (geografica o settoriale).
+    """
+    st.markdown(
+        f"""
+        <div style="
+            padding:1rem 1.2rem;
+            border-radius:12px;
+            background:rgba(255,255,255,0.03);
+            border:1px solid rgba(255,255,255,0.06);
+            height: 100%;
+            ">
+          <h3 style="margin-top:0;margin-bottom:0.5rem;">{title}</h3>
+          <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
+            {subtitle}
+          </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not data:
+        st.info("Nessun dato disponibile.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    view_mode = "Barre"
+    if show_map_toggle:
+        view_mode = st.radio(
+            "Vista", ["Barre", "Mappa"], horizontal=True,
+            key=map_toggle_key, label_visibility="collapsed"
+        )
+    else:
+        # Aggiunge uno spazio vuoto per allineare verticalmente le card
+        st.markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
+
+    if view_mode == "Barre":
+        df = pd.DataFrame(list(data.items()), columns=["Item", "Percentuale"])
+        df = df.sort_values("Percentuale", ascending=False)
+        max_val = df["Percentuale"].max() if not df.empty else 0
+
+        for _, row in df.iterrows():
+            bar_width = int((row["Percentuale"] / max_val) * 100) if max_val > 0 else 0
+            st.markdown(f"""
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                    <span style='font-weight:600;'>{row['Item']}</span>
+                    <span style='color:{text_color};'>{row['Percentuale']:.2f}%</span>
+                </div>
+                <div style="background-color:#222; border-radius:4px; width:100%; height:6px; margin-bottom:10px;">
+                    <div style="background:{bar_gradient}; width:{bar_width}%; height:6px; border-radius:4px;"></div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    elif view_mode == "Mappa":
+        render_geo_map(data, value_type="percent", toggle_key="map_projection_toggle_asset")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ========== COMPOSIZIONE ASSET (ORA MODULARE) ==========
+
 def render_allocation_charts(geo_data: dict, sec_data: dict):
     """
+    Mostra composizione asset chiamando il componente riutilizzabile per le card.
+    
     Mostra composizione asset con:
     - colonna sinistra: Paesi (toggle Barre / Mappa mondo)
     - colonna destra: Settori (liste con mini-barre)
+    
     """
     st.markdown(
         "<h2 style='margin-bottom:0.5rem;'>🧪 Composizione Asset</h2>",
@@ -156,136 +151,25 @@ def render_allocation_charts(geo_data: dict, sec_data: dict):
 
     col1, col2 = st.columns(2)
 
-    # ---------- CARD GEOGRAFICA ----------
     with col1:
-        st.markdown(
-            """
-            <div style="
-                padding:1rem 1.2rem;
-                border-radius:12px;
-                background:rgba(255,255,255,0.03);
-                border:1px solid rgba(255,255,255,0.06);
-                ">
-              <h3 style="margin-top:0;margin-bottom:0.5rem;">🌍 Esposizione Geografica</h3>
-              <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
-                Principali Paesi in portafoglio.
-              </p>
-            """,
-            unsafe_allow_html=True,
+        _render_single_allocation_card(
+            title="🌍 Esposizione Geografica",
+            subtitle="Principali Paesi in portafoglio.",
+            data=geo_data,
+            text_color="#7FDBFF",
+            bar_gradient="linear-gradient(90deg,#00c9ff,#92fe9d)",
+            show_map_toggle=True
         )
 
-        if geo_data:
-            df_g = pd.DataFrame(list(geo_data.items()), columns=["Paese", "Percentuale"])
-            df_g = df_g.sort_values("Percentuale", ascending=False)
-            max_val_g = df_g["Percentuale"].max()
-
-            # Toggle Barre/Mappa dentro la card
-            view_mode = st.radio(
-                "Vista",
-                ["Barre", "Mappa"],
-                horizontal=True,
-                key="geo_view_mode",
-                label_visibility="collapsed"
-            )
-
-            if view_mode == "Barre":
-                # Vista a barre (lista + mini-barre)
-                for _, row in df_g.iterrows():
-                    bar_width = int((row["Percentuale"] / max_val_g) * 100)
-
-                    left, right = st.columns([3, 1])
-                    with left:
-                        st.markdown(
-                            f"<span style='font-weight:600;'>{row['Paese']}</span>",
-                            unsafe_allow_html=True,
-                        )
-                    with right:
-                        st.markdown(
-                            f"<span style='float:right;color:#7FDBFF;'>{row['Percentuale']:.2f}%</span>",
-                            unsafe_allow_html=True,
-                        )
-
-                    st.markdown(
-                        f"""
-                        <div style="background-color:#222;border-radius:4px;
-                                    width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
-                            <div style="
-                                background:linear-gradient(90deg,#00c9ff,#92fe9d);
-                                width:{bar_width}%;
-                                height:6px;
-                                border-radius:4px;">
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-            else:
-                # Vista mappa mondo
-                render_geo_map_folium(geo_data)
-        else:
-            st.info("Nessun dato geografico disponibile.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---------- CARD SETTORIALE ----------
     with col2:
-        st.markdown(
-            """
-            <div style="
-                padding:1rem 1.2rem;
-                border-radius:12px;
-                background:rgba(255,255,255,0.03);
-                border:1px solid rgba(255,255,255,0.06);
-                ">
-              <h3 style="margin-top:0;margin-bottom:0.5rem;">🧬 Esposizione Settoriale</h3>
-              <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
-                Distribuzione per settore.
-              </p>
-            """,
-            unsafe_allow_html=True,
+        _render_single_allocation_card(
+            title="🧬 Esposizione Settoriale",
+            subtitle="Distribuzione per settore.",
+            data=sec_data,
+            text_color="#FFDC73",
+            bar_gradient="linear-gradient(90deg,#FFD166,#F77F00)",
+            show_map_toggle=False
         )
-
-        if sec_data:
-            # Spazio per allineare con il toggle della colonna geografica
-            st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
-            
-            df_s = pd.DataFrame(list(sec_data.items()), columns=["Settore", "Percentuale"])
-            df_s = df_s.sort_values("Percentuale", ascending=False)
-            max_val_s = df_s["Percentuale"].max()
-
-            for _, row in df_s.iterrows():
-                bar_width = int((row["Percentuale"] / max_val_s) * 100)
-
-                left, right = st.columns([3, 1])
-                with left:
-                    st.markdown(
-                        f"<span style='font-weight:600;'>{row['Settore']}</span>",
-                        unsafe_allow_html=True,
-                    )
-                with right:
-                    st.markdown(
-                        f"<span style='float:right;color:#FFDC73;'>{row['Percentuale']:.2f}%</span>",
-                        unsafe_allow_html=True,
-                    )
-
-                st.markdown(
-                    f"""
-                    <div style="background-color:#222;border-radius:4px;
-                                width:100%;height:6px;margin-top:2px;margin-bottom:10px;">
-                        <div style="
-                            background:linear-gradient(90deg,#FFD166,#F77F00);
-                            width:{bar_width}%;
-                            height:6px;
-                            border-radius:4px;">
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.info("Nessun dato settoriale disponibile.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ========== STORICO PREZZI E TRANSAZIONI ==========
@@ -297,9 +181,9 @@ def render_price_history(ticker: str, asset_prices: pd.DataFrame):
     st.divider()
     st.subheader("📉 Storico Prezzo")
     if not asset_prices.empty:
-        fig = px.line(asset_prices, x='date', y='close_price', title=f"Andamento {ticker}")
-        fig.update_traces(line_color='#00CC96')
-        st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
+        fig = plot_price_history(asset_prices, ticker)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Nessuna informazione sullo storico prezzi per questo asset.")
 

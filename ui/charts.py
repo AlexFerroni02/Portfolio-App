@@ -304,7 +304,7 @@ def plot_portfolio_history(df_hist: pd.DataFrame) -> go.Figure:
         
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_hist['Data'], y=df_hist['Valore'], mode='lines', name='Valore', line=dict(color='#00CC96'), fill='tozeroy'))
-    fig.add_trace(go.Scatter(x=df_hist['Data'], y=df_hist['Spesa'], mode='lines', name='Costi', line=dict(color='#EF553B', dash='dash')))
+    fig.add_trace(go.Scatter(x=df_hist['Data'], y=df_hist['Investito'], mode='lines', name='Costi', line=dict(color='#EF553B', dash='dash')))
     return style_chart_for_mobile(fig)
 
 def plot_treemap(view_df: pd.DataFrame) -> go.Figure:
