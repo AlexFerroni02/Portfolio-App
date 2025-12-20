@@ -1,11 +1,13 @@
 #!/bin/bash
 
-# Esporta la variabile d'ambiente che dice a Playwright dove trovare i browser.
-# Questa è la riga chiave che risolve il problema su Streamlit Cloud.
-export PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
-
-# Crea la cartella (con -p per non dare errore se esiste già)
-mkdir -p $PLAYWRIGHT_BROWSERS_PATH
-
-# Installa Chromium
+Setup script per Portfolio-App
+echo "📦 Installazione dipendenze Python..."
+pip install -r requirements.txt
+mkdir -p /home/appuser/.cache/ms-playwright
+echo "🌐 Installazione Chromium per Playwright..."
 playwright install chromium
+
+echo "✅ Setup completato!"
+echo ""
+echo "Per avviare l'app:"
+echo " streamlit run app.py"
