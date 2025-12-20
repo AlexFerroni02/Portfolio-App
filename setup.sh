@@ -1,7 +1,11 @@
 #!/bin/bash
 
-# Crea la cartella per i log di Playwright (misura di sicurezza per l'ambiente cloud)
-mkdir -p /home/appuser/.cache/ms-playwright
+# Esporta la variabile d'ambiente che dice a Playwright dove trovare i browser.
+# Questa è la riga chiave che risolve il problema su Streamlit Cloud.
+export PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
 
-# Installa solo Chromium. Streamlit Cloud si occupa già di 'pip install'.
+# Crea la cartella (con -p per non dare errore se esiste già)
+mkdir -p $PLAYWRIGHT_BROWSERS_PATH
+
+# Installa Chromium
 playwright install chromium
