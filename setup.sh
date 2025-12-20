@@ -1,13 +1,7 @@
 #!/bin/bash
-# Setup script per Portfolio-App
 
-echo "📦 Installazione dipendenze Python..."
-pip install -r requirements.txt
+# Crea la cartella per i log di Playwright (misura di sicurezza per l'ambiente cloud)
+mkdir -p /home/appuser/.cache/ms-playwright
 
-echo "🌐 Installazione Chromium per Playwright..."
+# Installa solo Chromium. Streamlit Cloud si occupa già di 'pip install'.
 playwright install chromium
-
-echo "✅ Setup completato!"
-echo ""
-echo "Per avviare l'app:"
-echo "  streamlit run app.py"
