@@ -2,3 +2,6 @@
 credentials.json
 .venv/
 venv/
+# Cache e file compilati di Python
+__pycache__/
+*.pyc

@@ -11,3 +11,6 @@ groq
 scikit-learn
 pycountry
 playwright
+pytest
+pytest-mock
+pytest-cov

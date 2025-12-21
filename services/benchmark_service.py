@@ -16,7 +16,11 @@ def run_benchmark_simulation(bench_ticker: str, df_trans: pd.DataFrame, df_map: 
     
     df_full = df_trans.merge(df_map, on='isin', how='left')
     start_date = df_trans['date'].min()
-    end_date = df_prices['date'].max() if not df_prices.empty else df_trans['date'].max()
+    end_date = (df_prices['date'].max() if not df_prices.empty else df_trans['date'].max())
+    
+    # Assicurati che l'intervallo di date sia di almeno un giorno per yfinance
+    if end_date <= start_date:
+        end_date = start_date + pd.Timedelta(days=1)
 
     try:
         bench_hist = yf.download(bench_ticker, start=start_date, end=end_date, progress=False)
