@@ -1,4 +1,3 @@
-// filepath: c:\Users\alexf\OneDrive\Desktop\AppAndrea\Portfolio-Andrea\.github\workflows\ci.yml
 name: Python application test
 
 on:
