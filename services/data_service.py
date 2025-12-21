@@ -548,7 +548,13 @@ def sync_prices(df_trans, df_map):
     if new_data:
         df_new = pd.DataFrame(new_data)
         df_new['date'] = pd.to_datetime(df_new['date']).dt.normalize()
-        save_data(df_new, "prices", method='append')
+        
+        # FIX: Combina i dati nuovi con quelli esistenti e rimuovi i duplicati prima di salvare.
+        # Questo previene l'errore 'Index contains duplicate entries' se la sync viene eseguita più volte.
+        df_combined = pd.concat([df_prices_all, df_new], ignore_index=True)
+        df_combined.drop_duplicates(subset=['date', 'ticker'], keep='last', inplace=True)
+        
+        save_data(df_combined, "prices", method='replace')
         return len(df_new)
     
     return 0
