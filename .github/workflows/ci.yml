@@ -20,11 +20,11 @@ jobs:
         python-version: "3.11"
         
     - name: Install dependencies
-          run: |
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install -r requirements-dev.txt
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
             
     - name: Test with pytest and generate coverage report
-          run: |
-            pytest --cov=services --cov=ui --cov-report=xml
+      run: |
+        pytest --cov=services --cov=ui --cov-report=xml
