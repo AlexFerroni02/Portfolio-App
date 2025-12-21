@@ -258,7 +258,7 @@ def _render_xray_card(title: str, subtitle: str, data: dict, key: str, text_colo
     view_mode = st.radio("Vista", view_options, horizontal=True, key=key, label_visibility="collapsed") if len(view_options) > 1 else "Barre"
     
     if not has_map:
-        st.markdown("<div style='height:38px;'></div>", unsafe_allow_html=True) # Spacer per allineamento
+        st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True) # Spacer per allineamento
 
     if view_mode == "Barre":
         df = pd.DataFrame(list(data.items()), columns=["Item", "Valore"]).sort_values("Valore", ascending=False)

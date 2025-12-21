@@ -100,7 +100,7 @@ def _render_single_allocation_card(
         )
     else:
         # Aggiunge uno spazio vuoto per allineare verticalmente le card
-        st.markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
 
     if view_mode == "Barre":
         df = pd.DataFrame(list(data.items()), columns=["Item", "Percentuale"])

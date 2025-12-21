@@ -60,3 +60,31 @@ def test_sync_prices_handles_duplicates_and_replaces(mocker):
     
     # Verifica che il nuovo prezzo per '2025-12-20' sia presente
     assert pd.to_datetime('2025-12-20') in saved_df['date'].values
+
+def test_sync_prices_no_new_data(mocker):
+    import pandas as pd
+    from services.data_service import sync_prices
+
+    df_trans = pd.DataFrame([{'isin': 'ISIN1', 'quantity': 10}])
+    df_map = pd.DataFrame([{'isin': 'ISIN1', 'ticker': 'TEST.MI'}])
+    prices_in_db = pd.DataFrame({
+        'date': [pd.to_datetime('2025-12-19')],
+        'ticker': ['TEST.MI'],
+        'close_price': [100.0]
+    })
+
+    # yfinance restituisce dati già presenti
+    new_prices_from_yf = pd.DataFrame({
+        'Close': [100.0]
+    }, index=pd.to_datetime(['2025-12-19']))
+
+    mocker.patch('services.data_service.get_data', return_value=prices_in_db)
+    mocker.patch('yfinance.download', return_value=new_prices_from_yf)
+    mock_save_data = mocker.patch('services.data_service.save_data')
+    mocker.patch('streamlit.progress')
+
+    result = sync_prices(df_trans, df_map)
+
+    # Non deve chiamare save_data
+    mock_save_data.assert_not_called()
+    assert result == 0
