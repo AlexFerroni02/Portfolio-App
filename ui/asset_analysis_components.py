@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 from typing import List, Dict, Any, Optional
 from ui.components import style_chart_for_mobile
-from ui.charts import render_geo_map, plot_price_history
+from ui.charts import render_geo_map, plot_price_history, render_allocation_card, ALLOCATION_CONFIG
 
 # ========== COMPONENTI UI ==========
 
@@ -57,84 +57,14 @@ def render_asset_kpis(kpi_data: Dict[str, Any]):
 
 # ========== COMPOSIZIONE ASSET (BARRE + MAPPA) ==========
 
-def _render_single_allocation_card(
-    title: str,
-    subtitle: str,
-    data: dict,
-    text_color: str,
-    bar_gradient: str,
-    show_map_toggle: bool = False,
-    map_toggle_key: str = "geo_view_mode"
-):
-    """
-    Funzione helper riutilizzabile per renderizzare una card di allocazione
-    (geografica o settoriale).
-    """
-    st.markdown(
-        f"""
-        <div style="
-            padding:1rem 1.2rem;
-            border-radius:12px;
-            background:rgba(255,255,255,0.03);
-            border:1px solid rgba(255,255,255,0.06);
-            height: 100%;
-            ">
-          <h3 style="margin-top:0;margin-bottom:0.5rem;">{title}</h3>
-          <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">
-            {subtitle}
-          </p>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if not data:
-        st.info("Nessun dato disponibile.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    view_mode = "Barre"
-    if show_map_toggle:
-        view_mode = st.radio(
-            "Vista", ["Barre", "Mappa"], horizontal=True,
-            key=map_toggle_key, label_visibility="collapsed"
-        )
-    else:
-        # Aggiunge uno spazio vuoto per allineare verticalmente le card
-        st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
-
-    if view_mode == "Barre":
-        df = pd.DataFrame(list(data.items()), columns=["Item", "Percentuale"])
-        df = df.sort_values("Percentuale", ascending=False)
-        max_val = df["Percentuale"].max() if not df.empty else 0
-
-        for _, row in df.iterrows():
-            bar_width = int((row["Percentuale"] / max_val) * 100) if max_val > 0 else 0
-            st.markdown(f"""
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-                    <span style='font-weight:600;'>{row['Item']}</span>
-                    <span style='color:{text_color};'>{row['Percentuale']:.2f}%</span>
-                </div>
-                <div style="background-color:#222; border-radius:4px; width:100%; height:6px; margin-bottom:10px;">
-                    <div style="background:{bar_gradient}; width:{bar_width}%; height:6px; border-radius:4px;"></div>
-                </div>
-            """, unsafe_allow_html=True)
-
-    elif view_mode == "Mappa":
-        render_geo_map(data, value_type="percent", toggle_key="map_projection_toggle_asset")
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ========== COMPOSIZIONE ASSET (ORA MODULARE) ==========
 
+
 def render_allocation_charts(geo_data: dict, sec_data: dict):
     """
     Mostra composizione asset chiamando il componente riutilizzabile per le card.
-    
-    Mostra composizione asset con:
-    - colonna sinistra: Paesi (toggle Barre / Mappa mondo)
-    - colonna destra: Settori (liste con mini-barre)
-    
     """
     st.markdown(
         "<h2 style='margin-bottom:0.5rem;'>🧪 Composizione Asset</h2>",
@@ -152,24 +82,12 @@ def render_allocation_charts(geo_data: dict, sec_data: dict):
     col1, col2 = st.columns(2)
 
     with col1:
-        _render_single_allocation_card(
-            title="🌍 Esposizione Geografica",
-            subtitle="Principali Paesi in portafoglio.",
-            data=geo_data,
-            text_color="#7FDBFF",
-            bar_gradient="linear-gradient(90deg,#00c9ff,#92fe9d)",
-            show_map_toggle=True
-        )
+        config = ALLOCATION_CONFIG["geo"]
+        render_allocation_card(config | {"data": geo_data})
 
     with col2:
-        _render_single_allocation_card(
-            title="🧬 Esposizione Settoriale",
-            subtitle="Distribuzione per settore.",
-            data=sec_data,
-            text_color="#FFDC73",
-            bar_gradient="linear-gradient(90deg,#FFD166,#F77F00)",
-            show_map_toggle=False
-        )
+        config = ALLOCATION_CONFIG["sec"]
+        render_allocation_card(config | {"data": sec_data})
 
 
 # ========== STORICO PREZZI E TRANSAZIONI ==========

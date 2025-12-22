@@ -5,8 +5,7 @@ import plotly.graph_objects as go
 import json
 from typing import Optional
 from ui.components import style_chart_for_mobile, color_pnl
-from ui.charts import render_geo_map, plot_portfolio_history
-
+from ui.charts import plot_portfolio_history, render_allocation_card, ALLOCATION_CONFIG_DASH
 
 def render_kpis(assets_view: pd.DataFrame):
     """Renderizza i KPI principali basandosi SOLO sugli asset."""
@@ -235,52 +234,10 @@ def _render_xray_allocation_tab(full_view: pd.DataFrame, df_alloc: pd.DataFrame)
     c_geo, c_sec = st.columns(2)
     
     with c_geo:
-        _render_xray_card("🌍 Esposizione Geografica", "Principali Paesi", total_geo, "geo_view_mode_dashboard", "#7FDBFF", "linear-gradient(90deg,#00c9ff,#92fe9d)")
+        render_allocation_card(ALLOCATION_CONFIG_DASH["geo"] | {"data": total_geo})
     
     with c_sec:
-        _render_xray_card("🧬 Esposizione Settoriale", "Distribuzione per settore", total_sec, "sec_view_mode_dashboard", "#FFDC73", "linear-gradient(90deg,#FFD166,#F77F00)", has_map=False)
-
-
-def _render_xray_card(title: str, subtitle: str, data: dict, key: str, text_color: str, bar_gradient: str, has_map: bool = True):
-    """Renderizza una card per l'analisi X-Ray (geografica o settoriale)."""
-    st.markdown(f"""
-        <div style="padding:1rem 1.2rem; border-radius:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); height: 100%;">
-            <h3 style="margin-top:0;margin-bottom:0.5rem;">{title}</h3>
-            <p style="margin-top:0;color:rgba(255,255,255,0.55);font-size:0.9rem;">{subtitle}</p>
-    """, unsafe_allow_html=True)
-
-    if not data:
-        st.info("Nessun dato disponibile. Vai su 'Gestione Dati' per scaricarlo.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    view_options = ["Barre", "Mappa"] if has_map else ["Barre"]
-    view_mode = st.radio("Vista", view_options, horizontal=True, key=key, label_visibility="collapsed") if len(view_options) > 1 else "Barre"
-    
-    if not has_map:
-        st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True) # Spacer per allineamento
-
-    if view_mode == "Barre":
-        df = pd.DataFrame(list(data.items()), columns=["Item", "Valore"]).sort_values("Valore", ascending=False)
-        total_sum = df["Valore"].sum()
-        df["Percentuale"] = (df["Valore"] / total_sum * 100) if total_sum > 0 else 0
-        max_val = df["Percentuale"].max()
-        
-        for _, row in df.head(10).iterrows(): # Mostra solo i top 10
-            bar_width = int((row["Percentuale"] / max_val) * 100) if max_val > 0 else 0
-            st.markdown(f"""
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style='font-weight:600;'>{row['Item']}</span>
-                    <span style='color:{text_color};'>{row['Percentuale']:.2f}%</span>
-                </div>
-                <div style="background-color:#222; border-radius:4px; width:100%; height:6px; margin-top:2px; margin-bottom:10px;">
-                    <div style="background:{bar_gradient}; width:{bar_width}%; height:6px; border-radius:4px;"></div>
-                </div>
-            """, unsafe_allow_html=True)
-    elif view_mode == "Mappa":
-         render_geo_map(data, value_type="euro", toggle_key="map_projection_toggle_dashboard")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        render_allocation_card(ALLOCATION_CONFIG_DASH["sec"] | {"data": total_sec})
 
 
 def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
