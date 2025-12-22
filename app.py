@@ -23,16 +23,23 @@ def load_all_data():
     }
 
 data = load_all_data()
-df_trans, df_map, df_prices, df_budget, df_alloc = data.values()
 
+df_trans, df_map, df_prices, df_budget, df_alloc = data.values()
+print("DEBUG: df_trans.head():", df_trans.head() if not df_trans.empty else "Vuoto")
+print("DEBUG: df_map.head():", df_map.head() if not df_map.empty else "Vuoto")
+print("DEBUG: df_prices.head():", df_prices.head() if not df_prices.empty else "Vuoto")
+print("DEBUG: Colonne df_prices:", df_prices.columns.tolist() if not df_prices.empty else "Vuoto")
+print("DEBUG: df_prices ha 'mapping_id'? :", 'mapping_id' in df_prices.columns if not df_prices.empty else False)
+print("DEBUG: df_prices ha 'ticker'? :", 'ticker' in df_prices.columns if not df_prices.empty else False)
 if df_trans.empty:
     st.info("👋 Benvenuto! Il database è vuoto. Vai su 'Gestione Dati' per importare il CSV.")
     st.stop()
 
-all_isins = df_trans['isin'].unique()
+# Calcola TUTTI gli ISIN presenti nelle transazioni (non solo quelli con quantità > 0)
+# Questo permette di mappare anche asset venduti, per avere prezzi storici completi nei grafici
+all_isins = df_trans['isin'].unique() if not df_trans.empty else []
 mapped_isins = df_map['isin'].unique() if not df_map.empty else []
 missing_isins = [i for i in all_isins if i not in mapped_isins]
-
 if missing_isins:
     st.warning(f"⚠️ Ci sono {len(missing_isins)} nuovi asset da mappare!")
     with st.form("quick_mapping_form"):
@@ -49,8 +56,8 @@ if missing_isins:
         if st.form_submit_button("💾 Salva e Aggiorna"):
             if new_mappings:
                 new_df = pd.DataFrame(new_mappings)
-                df_final = pd.concat([df_map, new_df], ignore_index=True).drop_duplicates(subset=['isin'], keep='last')
-                save_data(df_final, "mapping")
+                # Usa append per evitare di perdere gli ID esistenti e rompere le foreign keys
+                save_data(new_df, "mapping", method='append')
                 st.success("Mappatura salvata! Ricarico la pagina...")
                 st.rerun()
     st.stop() 

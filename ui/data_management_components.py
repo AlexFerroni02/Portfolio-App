@@ -150,49 +150,61 @@ def render_allocation_tab():
     selected_option = col_sel.selectbox("Seleziona un asset da analizzare:", options, key="asset_selector_alloc")
     if col_btn.button("⚡ Analizza Asset (JustETF)", type="primary"):
         with st.spinner("Scraping in corso..."):
-            sel_ticker = selected_option.split('(')[-1].replace(')', '')
-            sel_isin = view[view['ticker'] == sel_ticker].iloc[0]['isin']
-            geo, sec = fetch_justetf_allocation_robust(sel_isin)
-            st.session_state.scraped_data = {'ticker': sel_ticker, 'geo': geo, 'sec': sec} if geo or sec else None
-            if st.session_state.scraped_data: st.success(f"Dati per {sel_ticker} scaricati! Vai al punto 2.")
-            else: st.error("Nessun dato di allocazione trovato per questo ISIN.")
+            isin = selected_option.split('(')[-1].replace(')', '').strip()
+            geo_dict, sec_dict = fetch_justetf_allocation_robust(isin)
+            if geo_dict or sec_dict:
+                st.session_state.scraped_data = {'geo': geo_dict, 'sec': sec_dict, 'isin': isin}
+                st.success("✅ Dati scaricati! Vai alla sezione 2 per salvarli.")
+            else:
+                st.error("❌ Impossibile scaricare i dati. Riprova più tardi.")
+    
     if st.session_state.get('scraped_data'):
         st.subheader("2. Verifica e Salva Dati")
         data = st.session_state.scraped_data
         with st.form("verify_and_save_form"):
-            c1, c2 = st.columns(2)
-            geo_text = c1.text_area("JSON Geografico", value=json.dumps(data['geo'], indent=2, ensure_ascii=False), height=300)
-            sec_text = c2.text_area("JSON Settoriale", value=json.dumps(data['sec'], indent=2, ensure_ascii=False), height=300)
-            if st.form_submit_button("💾 Salva Dati nel Database", type="primary"):
+            st.write(f"**ISIN:** {data['isin']}")
+            geo_input = st.text_area("Dati Geografici (JSON)", value=json.dumps(data['geo'], indent=2), height=150)
+            sec_input = st.text_area("Dati Settoriali (JSON)", value=json.dumps(data['sec'], indent=2), height=150)
+            if st.form_submit_button("💾 Salva nel Database"):
                 try:
-                    save_allocation_json(data['ticker'], json.loads(geo_text), json.loads(sec_text))
-                    st.success(f"Dati per {data['ticker']} salvati!")
-                    st.session_state.scraped_data = None
-                    st.rerun()
-                except json.JSONDecodeError: st.error("Formato JSON non valido.")
+                    geo_parsed = json.loads(geo_input)
+                    sec_parsed = json.loads(sec_input)
+                    # Trova mapping_id dall'ISIN
+                    mapping_row = df_map[df_map['isin'] == data['isin']]
+                    if not mapping_row.empty:
+                        mapping_id = mapping_row['id'].iloc[0]
+                        save_allocation_json(mapping_id, geo_parsed, sec_parsed)
+                        st.success("✅ Dati salvati!")
+                        del st.session_state.scraped_data
+                        st.rerun()
+                    else:
+                        st.error("❌ ISIN non trovato nella mappatura.")
+                except json.JSONDecodeError:
+                    st.error("❌ JSON non valido. Correggi e riprova.")
+    
     st.divider()
     st.subheader("3. Modifica Dati Esistenti")
     if not df_alloc.empty:
-        ticker_to_edit = st.selectbox("Seleziona un asset da modificare:", df_alloc['ticker'].unique(), key="alloc_ticker_edit")
+        # Merge per aggiungere ticker a df_alloc
+        df_alloc_with_ticker = df_alloc.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
+        ticker_options = df_alloc_with_ticker['ticker'].unique()
+        ticker_to_edit = st.selectbox("Seleziona un asset da modificare:", ticker_options, key="alloc_ticker_edit")
         if ticker_to_edit:
-            record = df_alloc[df_alloc['ticker'] == ticker_to_edit].iloc[0]
-            with st.form(f"edit_alloc_form_{ticker_to_edit}"):
-                c1, c2 = st.columns(2)
-                try:
-                    geo_raw = record.get('geography_json')
-                    sec_raw = record.get('sector_json')
-                    geo_db = geo_raw if isinstance(geo_raw, dict) else json.loads(geo_raw or '{}')
-                    sec_db = sec_raw if isinstance(sec_raw, dict) else json.loads(sec_raw or '{}')
-                except (json.JSONDecodeError, TypeError):
-                    geo_db, sec_db = {}, {}
-                geo_text_edit = c1.text_area("JSON Geo", value=json.dumps(geo_db, indent=2, ensure_ascii=False), height=300, key=f"geo_{ticker_to_edit}")
-                sec_text_edit = c2.text_area("JSON Sec", value=json.dumps(sec_db, indent=2, ensure_ascii=False), height=300, key=f"sec_{ticker_to_edit}")
-                if st.form_submit_button("💾 Aggiorna Dati"):
+            asset_data = df_alloc_with_ticker[df_alloc_with_ticker['ticker'] == ticker_to_edit].iloc[0]
+            with st.form("edit_allocation_form"):
+                st.write(f"**Modifica per {ticker_to_edit}**")
+                geo_edit = st.text_area("Geografia (JSON)", value=json.dumps(asset_data.get('geography_json', {}), indent=2), height=150)
+                sec_edit = st.text_area("Settori (JSON)", value=json.dumps(asset_data.get('sector_json', {}), indent=2), height=150)
+                if st.form_submit_button("💾 Aggiorna"):
                     try:
-                        save_allocation_json(ticker_to_edit, json.loads(geo_text_edit), json.loads(sec_text_edit))
-                        st.success(f"Dati per {ticker_to_edit} aggiornati!")
+                        geo_parsed = json.loads(geo_edit)
+                        sec_parsed = json.loads(sec_edit)
+                        mapping_id = asset_data['mapping_id']
+                        save_allocation_json(mapping_id, geo_parsed, sec_parsed)
+                        st.success("✅ Aggiornato!")
                         st.rerun()
-                    except json.JSONDecodeError: st.error("Formato JSON non valido.")
+                    except json.JSONDecodeError:
+                        st.error("❌ JSON non valido.")
     else:
         st.info("Nessun dato di allocazione ancora salvato.")
 

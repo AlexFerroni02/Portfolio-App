@@ -55,7 +55,8 @@ def run_benchmark_simulation(bench_ticker: str, df_trans: pd.DataFrame, df_map: 
     my_val_history, bench_val_history = [], []
     pivot_user = pd.DataFrame()
     if not df_prices.empty:
-        pivot_user = df_prices.pivot_table(index='date', columns='ticker', values='close_price', aggfunc='last').sort_index().ffill()
+        df_prices_with_ticker = df_prices.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
+        pivot_user = df_prices_with_ticker.pivot_table(index='date', columns='ticker', values='close_price', aggfunc='last').sort_index().ffill()
     
     trans_grouped = df_full.groupby('date')
     user_qty, bench_qty = {}, 0.0

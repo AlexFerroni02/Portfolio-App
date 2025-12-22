@@ -111,3 +111,5 @@ streamlit run app.py
 
 # TO DO
 - playwright install chromium
+- da testare se vengono salvati adeguadamente i nuovi ticker aggiunti
+- anche sul mapper da controllare l aggiunta e la modifica e tutte le cose in Gestione Dati

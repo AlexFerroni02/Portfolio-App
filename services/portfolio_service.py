@@ -1,21 +1,38 @@
 import pandas as pd
 from datetime import datetime
 
-def calculate_portfolio_view(df_trans: pd.DataFrame, df_map: pd.DataFrame, df_prices: pd.DataFrame) -> pd.DataFrame:
-    """Calcola la vista aggregata degli ASSET del portafoglio (esclusa liquidità)."""
+def calculate_portfolio_view(df_trans, df_map, df_prices):
     if df_trans.empty or df_map.empty:
         return pd.DataFrame()
-    df_full = df_trans.merge(df_map, on='isin', how='left')
-    last_p = pd.Series(dtype='float64')
+    # Join transazioni e mapping su isin, con suffixes per evitare conflitti di colonne
+    df_full = df_trans.merge(df_map, on='isin', how='left', suffixes=('_trans', '_map'))
+    # Rinomina id_map in mapping_id
+    if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
+        df_full = df_full.rename(columns={'id_map': 'mapping_id'})
+    if 'mapping_id' not in df_full.columns:
+        df_full['mapping_id'] = pd.NA
+    print("DEBUG calculate_portfolio_view: df_full.head():", df_full.head())
+    print("DEBUG: mapping_id presenti (non NaN):", df_full['mapping_id'].notna().sum())
+    # Join prezzi e mapping su mapping_id
     if not df_prices.empty:
-        last_p = df_prices.sort_values('date').groupby('ticker').tail(1).set_index('ticker')['close_price']
-    view = df_full.groupby(['product', 'ticker', 'category']).agg(quantity=('quantity', 'sum'), local_value=('local_value', 'sum')).reset_index()
+        last_p = df_prices.sort_values('date').groupby('mapping_id').tail(1).set_index('mapping_id')['close_price']
+    else:
+        last_p = pd.Series(dtype='float64')
+    view = df_full.groupby(['product', 'mapping_id', 'category']).agg(
+        quantity=('quantity', 'sum'),
+        local_value=('local_value', 'sum')
+    ).reset_index()
+    print("DEBUG: view dopo groupby.head():", view.head())
     view = view[view['quantity'] > 0.001].copy()
     view['net_invested'] = -view['local_value']
-    view['curr_price'] = view['ticker'].map(last_p)
+    view['curr_price'] = view['mapping_id'].map(last_p)
+    print("DEBUG: view con curr_price.head():", view[['mapping_id', 'curr_price']].head())
     view['mkt_val'] = view['quantity'] * view['curr_price']
     view['pnl'] = view['mkt_val'] - view['net_invested']
     view['pnl%'] = (view['pnl'] / view['net_invested'].replace(0, pd.NA)) * 100
+    # Join per ottenere il ticker solo per visualizzazione
+    view = view.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
+    print("DEBUG: assets_view finale.head():", view.head())
     return view.fillna({'curr_price': 0, 'mkt_val': 0, 'pnl': 0, 'pnl%': 0})
 
 def calculate_liquidity(df_budget: pd.DataFrame, df_trans: pd.DataFrame) -> tuple[float, str]:
@@ -40,16 +57,21 @@ def calculate_liquidity(df_budget: pd.DataFrame, df_trans: pd.DataFrame) -> tupl
         final_liquidity = total_entrate - total_uscite - total_investito_netto
     return final_liquidity, "Liquidità Calcolata"
 
-def get_historical_portfolio(df_trans: pd.DataFrame, df_map: pd.DataFrame, df_prices: pd.DataFrame) -> pd.DataFrame:
-    """Calcola l'andamento storico del valore di portafoglio e del capitale investito."""
+def get_historical_portfolio(df_trans, df_map, df_prices):
     if df_prices.empty or df_trans.empty or df_map.empty:
         return pd.DataFrame()
-    df_full = df_trans.merge(df_map, on='isin', how='left')
+    df_full = df_trans.merge(df_map, on='isin', how='left', suffixes=('_trans', '_map'))
+    # FIX: rinomina id_map in mapping_id solo se serve
+    if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
+        df_full = df_full.rename(columns={'id_map': 'mapping_id'})
+    if 'mapping_id' not in df_full.columns:
+        df_full['mapping_id'] = pd.NA
     start_dt, end_dt = df_trans['date'].min(), datetime.today()
     full_idx = pd.date_range(start_dt, end_dt, freq='D').normalize()
-    daily_qty_change = df_full.pivot_table(index='date', columns='ticker', values='quantity', aggfunc='sum').fillna(0)
+    # Pivot su mapping_id invece che ticker
+    daily_qty_change = df_full.pivot_table(index='date', columns='mapping_id', values='quantity', aggfunc='sum').fillna(0)
     daily_holdings = daily_qty_change.reindex(full_idx, fill_value=0).cumsum()
-    price_matrix = df_prices.pivot(index='date', columns='ticker', values='close_price').reindex(full_idx).ffill()
+    price_matrix = df_prices.pivot_table(index='date', columns='mapping_id', values='close_price', aggfunc='last').reindex(full_idx).ffill()
     common_cols = daily_holdings.columns.intersection(price_matrix.columns)
     daily_value = (daily_holdings[common_cols] * price_matrix[common_cols]).sum(axis=1)
     daily_inv_change = df_full.pivot_table(index='date', values='local_value', aggfunc='sum').fillna(0)

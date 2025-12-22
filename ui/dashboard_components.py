@@ -205,7 +205,7 @@ def _render_detail_pie_chart(full_view: pd.DataFrame, category: str, color_scale
 def _render_xray_allocation_tab(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
     """Renderizza il tab con l'analisi X-Ray (geografica e settoriale)."""
     st.caption("Questa analisi mostra l'esposizione geografica e settoriale aggregata, pesata per il valore di ogni asset.")
-    view_alloc = full_view.merge(df_alloc, on='ticker', how='left') if not df_alloc.empty else full_view.copy()
+    view_alloc = full_view.merge(df_alloc, on='mapping_id', how='left') if not df_alloc.empty else full_view.copy()
     total_val = view_alloc['mkt_val'].sum()
     
     if total_val <= 0:

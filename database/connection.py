@@ -61,7 +61,7 @@ def save_data(df: pd.DataFrame, table_name: str, method: str = 'replace') -> Non
     except Exception as e:
         st.error(f"Errore durante il salvataggio della tabella '{table_name}': {e}")
 
-def save_allocation_json(ticker: str, geo_dict: Dict[str, float], sec_dict: Dict[str, float]) -> None:
+def save_allocation_json(mapping_id: int, geo_dict: Dict[str, float], sec_dict: Dict[str, float]) -> None:
     """
     Salva i dizionari di allocazione come JSON nel DB usando UPSERT.
     """
@@ -70,17 +70,17 @@ def save_allocation_json(ticker: str, geo_dict: Dict[str, float], sec_dict: Dict
     sec_json = json.dumps(sec_dict, ensure_ascii=False)
     
     query = text("""
-        INSERT INTO asset_allocation (ticker, geography_json, sector_json, last_updated)
-        VALUES (:t, :g, :s, NOW())
-        ON CONFLICT (ticker) DO UPDATE 
+        INSERT INTO asset_allocation (mapping_id, geography_json, sector_json, last_updated)
+        VALUES (:m, :g, :s, NOW())
+        ON CONFLICT (mapping_id) DO UPDATE 
         SET geography_json = :g, sector_json = :s, last_updated = NOW();
     """)
     
     try:
         with conn.session as s:
-            s.execute(query, {'t': ticker, 'g': geo_json, 's': sec_json})
+            s.execute(query, {'m': mapping_id, 'g': geo_json, 's': sec_json})
             s.commit()
         
         st.cache_data.clear()
     except Exception as e:
-        st.error(f"Errore salvataggio JSON per {ticker}: {e}")
+        st.error(f"Errore salvataggio JSON per mapping_id={mapping_id}: {e}")

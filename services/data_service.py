@@ -72,9 +72,11 @@ def calculate_net_worth_snapshot(snapshot_date: pd.Timestamp, df_trans: pd.DataF
     # 1. Calcolo Valore Asset alla data
     if not trans_at_date.empty and not df_map.empty and not prices_at_date.empty:
         df_full_nw = trans_at_date.merge(df_map, on='isin', how='left')
-        last_prices_at_date = prices_at_date.sort_values('date').groupby('ticker').tail(1).set_index('ticker')['close_price']
-        view_nw = df_full_nw.groupby('ticker')['quantity'].sum().reset_index()
-        view_nw['mkt_val'] = view_nw['quantity'] * view_nw['ticker'].map(last_prices_at_date).fillna(0)
+        if 'mapping_id' not in df_full_nw.columns and 'id' in df_full_nw.columns:
+            df_full_nw = df_full_nw.rename(columns={'id': 'mapping_id'})
+        last_prices_at_date = prices_at_date.sort_values('date').groupby('mapping_id').tail(1).set_index('mapping_id')['close_price']
+        view_nw = df_full_nw.groupby('mapping_id')['quantity'].sum().reset_index()
+        view_nw['mkt_val'] = view_nw['quantity'] * view_nw['mapping_id'].map(last_prices_at_date).fillna(0)
         total_assets_value = view_nw['mkt_val'].sum()
 
     # 2. Calcolo Liquidità alla data (usando la funzione di servizio già esistente)
@@ -478,70 +480,74 @@ def _fetch_justetf_playwright(isin):
 
 def sync_prices(df_trans, df_map):
     if df_trans.empty or df_map.empty: return 0
-    df_full = df_trans.merge(df_map, on='isin', how='left')
-    holdings = df_full.groupby('ticker')['quantity'].sum()
-    owned_tickers = holdings[holdings > 0.001].index.dropna().tolist()
-    if not owned_tickers: return 0
+    df_full = df_trans.merge(df_map, on='isin', how='left', suffixes=('_trans', '_map'))
+    if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
+        df_full = df_full.rename(columns={'id_map': 'mapping_id'})
+    
+    # Usa TUTTI i mapping_id mappati, non solo quelli posseduti
+    all_mapping_ids = df_map['id'].tolist()
+    if not all_mapping_ids: return 0
 
     df_prices_all = get_data("prices")
     if not df_prices_all.empty:
-        # Assicuriamoci che la colonna 'date' sia 'datetime' e senza fuso orario per confronti sicuri
         df_prices_all['date'] = pd.to_datetime(df_prices_all['date'], errors='coerce').dt.tz_localize(None).dt.normalize()
     
     new_data = []
     errors = []
     bar = st.progress(0, text="Sincronizzazione prezzi...")
     
-    # Definiamo "oggi" e "ieri"
     today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
 
-    for i, t in enumerate(owned_tickers):
+    for i, m_id in enumerate(all_mapping_ids):
+        # Trova la data massima di possesso per questo mapping_id
+        max_date = df_full[df_full['mapping_id'] == m_id]['date'].max()
+        print(f"DEBUG sync_prices: m_id {m_id}, max_date {max_date}")
+        if pd.isna(max_date):
+            print("Skipping, no possession")
+            bar.progress((i + 1) / len(all_mapping_ids))
+            continue
+        
+        # End date = max_date + 1 giorno (per includere l'ultimo giorno di possesso)
+        end_date = (max_date + timedelta(days=1)).date()
+        if end_date > today:
+            end_date = today
+        print(f"end_date {end_date}")
+        
+        # Ottieni il ticker per il download
+        ticker_row = df_map[df_map['id'] == m_id]
+        if ticker_row.empty:
+            bar.progress((i + 1) / len(all_mapping_ids))
+            continue
+        t = ticker_row['ticker'].iloc[0]
+        
         start_date = "2020-01-01"
         needs_update = True
         
         if not df_prices_all.empty:
-            exist = df_prices_all[df_prices_all['ticker'] == t]
-            if not exist.empty:
-                last_price_date = exist['date'].max().date()
-                
-                # Se abbiamo già i dati fino a ieri, siamo a posto.
-                if last_price_date >= yesterday:
+            existing_prices = df_prices_all[df_prices_all['mapping_id'] == m_id]
+            if not existing_prices.empty:
+                last_date = existing_prices['date'].max().date()
+                print(f"last_date in DB {last_date}")
+                if last_date >= end_date:
+                    print("Already updated")
                     needs_update = False
-                else:
-                    start_date = (last_price_date + timedelta(days=1)).strftime('%Y-%m-%d')
-
+        
         if needs_update:
-            bar.progress((i + 1) / len(owned_tickers), text=f"Scaricando {t} dal {start_date}...")
             try:
-                # Scarica i dati
-                hist = yf.download(t, start=start_date, progress=False)
-                
-                # --- FIX PER YFINANCE RECENTE (MultiIndex) ---
-                if isinstance(hist.columns, pd.MultiIndex):
-                    try:
-                        if t in hist.columns.get_level_values(1):
-                            hist = hist.xs(t, axis=1, level=1)
-                        else:
-                            hist.columns = hist.columns.get_level_values(0)
-                    except Exception:
-                        hist.columns = hist.columns.get_level_values(0)
-
-                if not hist.empty and 'Close' in hist.columns:
-                    for d, v in hist['Close'].items():
-                        # --- FILTRO FONDAMENTALE ---
-                        # Salviamo SOLO se la data del dato è STRETTAMENTE PRECEDENTE a oggi.
-                        # Questo scarta qualsiasi prezzo "live" o "intraday" di oggi.
-                        if pd.notna(v) and d.date() < today: 
-                            new_data.append({'ticker': t, 'date': d.normalize().tz_localize(None), 'close_price': float(v)})
-                else:
-                    if hist.empty:
-                        print(f"Nessun dato trovato per {t} dal {start_date}")
-            except Exception as e: 
-                errors.append(f"{t}: {str(e)}")
-        else:
-            bar.progress((i + 1) / len(owned_tickers), text=f"{t} già aggiornato.")
+                hist = yf.download(t, start=start_date, end=end_date + timedelta(days=1), progress=False)
+                if not hist.empty:
+                    hist = hist[['Close']].reset_index()
+                    hist.columns = ['date', 'close_price']
+                    hist['date'] = pd.to_datetime(hist['date']).dt.normalize()
+                    hist['mapping_id'] = m_id  # Salva con mapping_id corretto
+                    new_data.extend(hist.to_dict('records'))
+                    print(f"Downloaded {len(hist)} prices for {t}")
+            except Exception as e:
+                errors.append(t)
+                print(f"Error for {t}: {e}")
+        bar.progress((i + 1) / len(all_mapping_ids))
     
+    bar.empty()
     if errors:
         st.warning(f"Problemi con alcuni ticker: {', '.join(errors)}")
 
@@ -552,13 +558,13 @@ def sync_prices(df_trans, df_map):
         # Unisci e rimuovi duplicati
         before = len(df_prices_all)
         df_combined = pd.concat([df_prices_all, df_new], ignore_index=True)
-        df_combined.drop_duplicates(subset=['date', 'ticker'], keep='last', inplace=True)
+        df_combined.drop_duplicates(subset=['date', 'mapping_id'], keep='last', inplace=True)
         after = len(df_combined)
         added = after - before
 
         if added > 0:
             save_data(df_combined, "prices", method='replace')
-            st.success(f"✅ Sincronizzazione completata: aggiunti {added} nuovi prezzi.")
+            st.success(f"✅ Aggiunti {added} nuovi prezzi.")
         else:
             st.info("✅ Prezzi già aggiornati, nessun nuovo dato aggiunto.")
         return added
