@@ -7,7 +7,9 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from database.connection import get_data, save_data
 from services.portfolio_service import calculate_liquidity
+from typing import Any
 import json
+
 def parse_degiro_csv(file):
     df = pd.read_csv(file)
     cols = ['Quantità', 'Quotazione', 'Valore', 'Costi di transazione', 'Totale']
@@ -25,7 +27,7 @@ def generate_id(row, index):
     raw = f"{index}{d_str}{row.get('Ora','')}{row.get('ISIN','')}{row.get('Quantità','')}{row.get('Valore','')}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-def process_new_transactions(file: "UploadedFile", existing_transactions: pd.DataFrame) -> pd.DataFrame:
+def process_new_transactions(file: Any, existing_transactions: pd.DataFrame) -> pd.DataFrame:
     """
     Elabora un file CSV di transazioni, lo confronta con quelle esistenti e restituisce solo le nuove.
     """
@@ -293,18 +295,6 @@ def _fetch_justetf_beautifulsoup(isin):
                                         pass
                 except Exception:
                     pass
-            if table:
-                for row in table.find_all('tr'):
-                    cols = row.find_all('td')
-                    if len(cols) >= 2:
-                        key = cols[0].text.strip()
-                        val_str = cols[1].text.strip().replace('%', '').replace(',', '.')
-                        try:
-                            val = float(val_str)
-                            if val < 101:
-                                geo_dict[key] = val
-                        except (ValueError, TypeError):
-                            pass
 
         # --- SETTORI ---
         h3_sec = soup.find('h3', string=lambda text: text and 'Settori' in text)
@@ -373,18 +363,6 @@ def _fetch_justetf_beautifulsoup(isin):
                                         pass
                 except Exception:
                     pass
-            if table:
-                for row in table.find_all('tr'):
-                    cols = row.find_all('td')
-                    if len(cols) >= 2:
-                        key = cols[0].text.strip()
-                        val_str = cols[1].text.strip().replace('%', '').replace(',', '.')
-                        try:
-                            val = float(val_str)
-                            if val < 101:
-                                sec_dict[key] = val
-                        except (ValueError, TypeError):
-                            pass
         
         return geo_dict, sec_dict
 
@@ -542,6 +520,8 @@ def sync_prices(df_trans, df_map):
     df_full = df_trans.merge(df_map, on='isin', how='left', suffixes=('_trans', '_map'))
     if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
         df_full = df_full.rename(columns={'id_map': 'mapping_id'})
+    if 'mapping_id' not in df_full.columns and 'id' in df_full.columns:
+        df_full = df_full.rename(columns={'id': 'mapping_id'})
     
     # Usa TUTTI gli id mappati, non solo quelli posseduti
     all_mapping_ids = df_map['id'].tolist()

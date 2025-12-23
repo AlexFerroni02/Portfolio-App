@@ -15,7 +15,7 @@ def test_sync_prices_handles_duplicates_and_replaces(mocker):
     """
     # 1. ARRANGE: Prepara dati finti
     df_trans = pd.DataFrame([{'isin': 'ISIN1', 'quantity': 10, 'date': pd.to_datetime('2025-12-19')}])
-    df_map = pd.DataFrame([{'isin': 'ISIN1', 'ticker': 'TEST.MI', 'mapping_id': 1}])
+    df_map = pd.DataFrame([{'isin': 'ISIN1', 'ticker': 'TEST.MI', 'id': 1}])
 
     # Dati già presenti nel database (usa mapping_id come chiave)
     prices_in_db = pd.DataFrame({
@@ -69,7 +69,7 @@ def test_sync_prices_no_new_data(mocker):
     from services.data_service import sync_prices
 
     df_trans = pd.DataFrame([{'isin': 'ISIN1', 'quantity': 10, 'date': pd.to_datetime('2025-12-19')}])
-    df_map = pd.DataFrame([{'isin': 'ISIN1', 'ticker': 'TEST.MI', 'mapping_id': 1}])
+    df_map = pd.DataFrame([{'isin': 'ISIN1', 'ticker': 'TEST.MI', 'id': 1}])
     
     # Dati già presenti nel database con mapping_id
     prices_in_db = pd.DataFrame({
