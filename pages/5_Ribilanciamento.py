@@ -10,7 +10,6 @@ from services.rebalancing_service import (
 )
 from ui.components import make_sidebar
 from ui.rebalancing_components import (
-    render_portfolio_summary,
     render_asset_class_inputs,
     render_investment_amount_input,
     render_ticker_distribution,
@@ -30,8 +29,6 @@ assets_view = calculate_portfolio_view(df_trans, df_map, df_prices)
 summary = get_portfolio_summary(assets_view)
 total_portfolio = summary["total_value"]
 
-# Summary metric
-render_portfolio_summary(summary)
 
 # --- 2. Input utente: Asset Class ---
 asset_classes = render_asset_class_inputs()

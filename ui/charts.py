@@ -93,7 +93,7 @@ COUNTRY_ALIASES_IT = {
     "filippine": "Philippines",
     "emirati arabi uniti": "United Arab Emirates",
     "arabia saudita": "Saudi Arabia",
-    "United Arab Emirates": "United Arab Emirates",
+    "united arab emirates": "United Arab Emirates",
     "saudi arabia": "Saudi Arabia",
     "israele": "Israel",
     "turchia": "Turkey",
@@ -109,7 +109,14 @@ COUNTRY_ALIASES_IT = {
     "colombia": "Colombia",
     "perù": "Peru",
     "venezuela": "Venezuela",
-    
+    "isole cayman": "Cayman Islands",
+    "bolivia": "Bolivia",
+    "ecuador": "Ecuador",
+    "paraguay": "Paraguay",
+    "uruguay": "Uruguay",
+    "guyana": "Guyana",
+    "suriname": "Suriname",
+        
     # Africa
     "sudafrica": "South Africa",
     "sud africa": "South Africa",
@@ -168,7 +175,8 @@ def render_geo_map(geo_dict: dict, value_type: str = "euro", toggle_key: str = "
     Mappa geografica interattiva con Plotly - versione modulare e riutilizzabile.
     
     Args:
-        geo_dict: {nome_paese_IT: valore} - può essere in euro o percentuale
+        geo_dict: {nome_paese_IT: valore} - può essere in euro o percentuale.
+                  Le chiavi dovrebbero essere già normalizzate in minuscolo dalla funzione save_allocation_json.
         value_type: "euro" o "percent" - determina il formato di visualizzazione
         toggle_key: chiave univoca per il widget di toggle (evita conflitti)
         include_others: se True, non esclude "Altri" e setta altri_value = 0
@@ -179,8 +187,9 @@ def render_geo_map(geo_dict: dict, value_type: str = "euro", toggle_key: str = "
     # ========== PREPARAZIONE DATI ==========
     # Determina il nome della colonna valore basato sul tipo
     value_col = "Valore" if value_type == "euro" else "Percentuale"
-    # Crea DataFrame dai dati
+    # Crea DataFrame dai dati (le chiavi dovrebbero essere già in minuscolo)
     df_full = pd.DataFrame(list(geo_dict.items()), columns=["Paese_it", value_col])
+    # Normalizza ulteriormente per sicurezza (strip e lower)
     df_full["key"] = df_full["Paese_it"].astype(str).str.strip().str.lower()
     
     # Calcola il totale originale (incluso "Altri")

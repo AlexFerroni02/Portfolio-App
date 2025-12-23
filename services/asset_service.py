@@ -32,7 +32,7 @@ def get_asset_kpis(mapping_id: int, owned_assets: pd.DataFrame, df_asset_trans: 
     asset_info = owned_assets[owned_assets['mapping_id'] == mapping_id].iloc[0]
     qty = asset_info['quantity']
     invested = -df_asset_trans['local_value'].sum()
-    map_row = df_map[df_map['mapping_id'] == mapping_id].iloc[0] if not df_map.empty else {}
+    map_row = df_map[df_map['id'] == mapping_id].iloc[0] if not df_map.empty else {}
     ticker = map_row['ticker'] if 'ticker' in map_row else None
     product_name = asset_info['product']
     

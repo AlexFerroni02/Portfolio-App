@@ -87,6 +87,7 @@ def calculate_net_worth_snapshot(snapshot_date: pd.Timestamp, df_trans: pd.DataF
     
     return net_worth_at_date, total_assets_value, final_liquidity
 
+
 def fetch_justetf_allocation_robust(isin):
     """
     Scarica da JustETF con fallback intelligente:
@@ -115,7 +116,6 @@ def fetch_justetf_allocation_robust(isin):
 
     # METODO 3: Se i risultati sono incompleti (<=5 paesi/settori), prova Playwright
     if (len(geo_dict) <= 5 or len(sec_dict) <= 5):
-        st.info("🔄 Dati limitati, provo con Playwright per espandere le tabelle...")
         geo_pw, sec_pw = _fetch_justetf_playwright(isin)
         if geo_pw:
             geo_dict.update(geo_pw)
@@ -167,8 +167,8 @@ def _try_fetch_justetf_api(isin):
                 # Qui potresti parsare JavaScript inline se necessario
                 pass
                 
-    except Exception as e:
-        pass  # Silenzioso, proveremo BeautifulSoup
+    except Exception:
+        pass
     
     return geo_dict, sec_dict
 
@@ -247,7 +247,6 @@ def _fetch_justetf_beautifulsoup(isin):
                         extra_url = f"https://www.justetf.com{extra_url}"
 
                 try:
-                    st.info(f"🔄 Caricamento dati extra da: {extra_url}")
                     # se è un endpoint Wicket AJAX usiamo la chiamata emulata
                     extra_response = None
                     if '_wicket=1' in extra_url or 'loadMore' in extra_url or 'holdingsSection' in extra_url:
@@ -292,10 +291,8 @@ def _fetch_justetf_beautifulsoup(isin):
                                             geo_dict[key] = val
                                     except Exception:
                                         pass
-                except Exception as e:
-                    st.warning(f"⚠️ Impossibile caricare dati extra: {e}")
-
-            table = h3_geo.find_next('table')
+                except Exception:
+                    pass
             if table:
                 for row in table.find_all('tr'):
                     cols = row.find_all('td')
@@ -374,10 +371,8 @@ def _fetch_justetf_beautifulsoup(isin):
                                             sec_dict[key] = val
                                     except Exception:
                                         pass
-                except Exception as e:
-                    st.warning(f"⚠️ Impossibile caricare dati settori extra: {e}")
-
-            table = h3_sec.find_next('table')
+                except Exception:
+                    pass
             if table:
                 for row in table.find_all('tr'):
                     cols = row.find_all('td')
@@ -390,11 +385,10 @@ def _fetch_justetf_beautifulsoup(isin):
                                 sec_dict[key] = val
                         except (ValueError, TypeError):
                             pass
-
+        
         return geo_dict, sec_dict
 
-    except Exception as e:
-        st.error(f"Scraping fallito per {isin}: {e}")
+    except Exception:
         return {}, {}
     
 
@@ -413,69 +407,134 @@ def _fetch_justetf_playwright(isin):
             url = f"https://www.justetf.com/it/etf-profile.html?isin={isin}"
             page.goto(url, wait_until='networkidle')
             
-            # Chiudi cookie banner se presente (blocca i click)
+            # Chiudi cookie banner se presente (blocca i click) - prova più selettori
             try:
-                cookie_btn = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll')
-                if cookie_btn.is_visible(timeout=3000):
-                    cookie_btn.click()
-                    page.wait_for_timeout(500)
+                # Prova diversi selettori per il cookie banner
+                cookie_selectors = [
+                    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+                    '[data-testid="uc-accept-all-button"]',
+                    '.cookie-consent-accept-all',
+                    '#cookie-accept-all',
+                    'button[data-testid*="accept"]',
+                    'button:contains("Accetta")'
+                ]
+                for selector in cookie_selectors:
+                    try:
+                        cookie_btn = page.locator(selector)
+                        if cookie_btn.is_visible(timeout=2000):
+                            cookie_btn.click()
+                            page.wait_for_timeout(500)
+                            break
+                    except Exception:
+                        continue
             except Exception:
                 pass  # Cookie già accettati o banner non presente
 
             # --- PAESI ---
             try:
-                countries_link = page.locator('[data-testid="etf-holdings_countries_load-more_link"]')
-                if countries_link.is_visible(timeout=2000):
-                    countries_link.click()
-                    page.wait_for_timeout(1500)  # Aspetta espansione tabella
+                # Prova diversi selettori per il link "Mostra di più" paesi
+                countries_selectors = [
+                    '[data-testid="etf-holdings_countries_load-more_link"]',
+                    'a.etf-holdings_countries_load-more_link',
+                    'a:contains("Mostra di più")',
+                    'a:contains("Carica di più")',
+                    '.load-more-link'
+                ]
+                for selector in countries_selectors:
+                    try:
+                        countries_link = page.locator(selector)
+                        if countries_link.is_visible(timeout=2000):
+                            countries_link.click()
+                            page.wait_for_timeout(1500)
+                            break
+                    except Exception:
+                        continue
             except Exception:
                 pass
 
-            # Estrai dati dalla tabella principale (ora espansa)
-            rows = page.locator('h3:text-is("Paesi") ~ table tr').all()
-            for row in rows:
-                cols = row.locator('td').all()
-                if len(cols) >= 2:
-                    try:
-                        key = cols[0].inner_text().strip()
-                        val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
-                        val = float(val_str)
-                        if 0 < val < 101:
-                            geo_dict[key] = val
-                    except Exception:
-                        pass
+            # Estrai dati dalla tabella principale (ora espansa) - prova più selettori
+            countries_table_selectors = [
+                'h3:text-is("Paesi") ~ table tr',
+                'h3:contains("Paesi") ~ table tr',
+                '.countries-table tr',
+                'table tr:has(td:contains("%"))'
+            ]
+            
+            for table_selector in countries_table_selectors:
+                try:
+                    rows = page.locator(table_selector).all()
+                    if rows:
+                        for row in rows:
+                            cols = row.locator('td').all()
+                            if len(cols) >= 2:
+                                try:
+                                    key = cols[0].inner_text().strip()
+                                    val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
+                                    val = float(val_str)
+                                    if 0 < val < 101:
+                                        geo_dict[key] = val
+                                except Exception:
+                                    pass
+                        if geo_dict:  # Se abbiamo trovato dati, interrompi
+                            break
+                except Exception:
+                    continue
 
             # --- SETTORI ---
             try:
-                sectors_link = page.locator('[data-testid="etf-holdings_sectors_load-more_link"]')
-                if sectors_link.is_visible(timeout=2000):
-                    sectors_link.click()
-                    page.wait_for_timeout(1500)
+                # Prova diversi selettori per il link "Mostra di più" settori
+                sectors_selectors = [
+                    '[data-testid="etf-holdings_sectors_load-more_link"]',
+                    'a.etf-holdings_sectors_load-more_link',
+                    'a:contains("Mostra di più")',
+                    'a:contains("Carica di più")'
+                ]
+                for selector in sectors_selectors:
+                    try:
+                        sectors_link = page.locator(selector)
+                        if sectors_link.is_visible(timeout=2000):
+                            sectors_link.click()
+                            page.wait_for_timeout(1500)
+                            break
+                    except Exception:
+                        continue
             except Exception:
                 pass
 
-            rows = page.locator('h3:text-is("Settori") ~ table tr').all()
-            for row in rows:
-                cols = row.locator('td').all()
-                if len(cols) >= 2:
-                    try:
-                        key = cols[0].inner_text().strip()
-                        val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
-                        val = float(val_str)
-                        if 0 < val < 101:
-                            sec_dict[key] = val
-                    except Exception:
-                        pass
+            # Estrai dati dalla tabella settori - prova più selettori
+            sectors_table_selectors = [
+                'h3:text-is("Settori") ~ table tr',
+                'h3:contains("Settori") ~ table tr',
+                '.sectors-table tr'
+            ]
+            
+            for table_selector in sectors_table_selectors:
+                try:
+                    rows = page.locator(table_selector).all()
+                    if rows:
+                        for row in rows:
+                            cols = row.locator('td').all()
+                            if len(cols) >= 2:
+                                try:
+                                    key = cols[0].inner_text().strip()
+                                    val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
+                                    val = float(val_str)
+                                    if 0 < val < 101:
+                                        sec_dict[key] = val
+                                except Exception:
+                                    pass
+                        if sec_dict:  # Se abbiamo trovato dati, interrompi
+                            break
+                except Exception:
+                    continue
 
             browser.close()
 
         return geo_dict, sec_dict
 
     except ImportError:
-        st.error("⚠️ Installa Playwright: pip install playwright && playwright install chromium")
         return {}, {}
-    except Exception as e:
-        st.error(f"❌ Playwright fallito: {e}")
+    except Exception:
         return {}, {}
 
 def sync_prices(df_trans, df_map):
@@ -484,8 +543,8 @@ def sync_prices(df_trans, df_map):
     if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
         df_full = df_full.rename(columns={'id_map': 'mapping_id'})
     
-    # Usa TUTTI i mapping_id mappati, non solo quelli posseduti
-    all_mapping_ids = df_map['mapping_id'].tolist()
+    # Usa TUTTI gli id mappati, non solo quelli posseduti
+    all_mapping_ids = df_map['id'].tolist()
     if not all_mapping_ids: return 0
 
     df_prices_all = get_data("prices")
@@ -514,7 +573,7 @@ def sync_prices(df_trans, df_map):
         print(f"end_date {end_date}")
         
         # Ottieni il ticker per il download
-        ticker_row = df_map[df_map['mapping_id'] == m_id]
+        ticker_row = df_map[df_map['id'] == m_id]
         if ticker_row.empty:
             bar.progress((i + 1) / len(all_mapping_ids))
             continue
@@ -524,7 +583,7 @@ def sync_prices(df_trans, df_map):
         needs_update = True
         
         if not df_prices_all.empty:
-            existing_prices = df_prices_all[df_prices_all['ticker'] == t]
+            existing_prices = df_prices_all[df_prices_all['mapping_id'] == m_id]
             if not existing_prices.empty:
                 last_date = existing_prices['date'].max().date()
                 print(f"last_date in DB {last_date}")
