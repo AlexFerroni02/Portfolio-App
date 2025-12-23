@@ -92,30 +92,48 @@ def render_allocation_charts(geo_data: dict, sec_data: dict):
 
 # ========== STORICO PREZZI E TRANSAZIONI ==========
 
-def render_price_history(ticker: str, asset_prices: pd.DataFrame):
+def render_price_history(ticker: str, asset_prices: pd.DataFrame, df_asset_trans: pd.DataFrame):
     """
     Renderizza il grafico dello storico prezzi.
     """
     st.divider()
     st.subheader("📉 Storico Prezzo")
     if not asset_prices.empty:
-        fig = plot_price_history(asset_prices, ticker)
+        fig = plot_price_history(asset_prices, ticker, df_asset_trans)
         if fig:
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Nessuna informazione sullo storico prezzi per questo asset.")
 
 
-def render_transactions_table(df_asset_trans: pd.DataFrame):
+def render_transactions_table(df_asset_trans: pd.DataFrame, last_price: float):
     """
-    Renderizza la tabella con lo storico delle transazioni.
+    Renderizza la tabella con lo storico delle transazioni e performance.
     """
     st.subheader("📝 Storico Transazioni")
+    
+    # Calcola la performance per ogni transazione
+    if not df_asset_trans.empty and last_price > 0:
+        df_display = df_asset_trans.copy()
+        df_display['costo_unitario'] = df_display.apply(
+            lambda row: (abs(row['local_value']) + row['fees']) / abs(row['quantity']) if row['quantity'] != 0 else 0,
+            axis=1
+        )
+        df_display['performance_pct'] = df_display.apply(
+            lambda row: ((last_price - row['costo_unitario']) / row['costo_unitario'] * 100) if row['costo_unitario'] != 0 else 0,
+            axis=1
+        )
+    else:
+        df_display = df_asset_trans.copy()
+        df_display['costo_unitario'] = 0.0
+        df_display['performance_pct'] = 0.0
+    
     st.dataframe(
-        df_asset_trans[['date', 'product', 'quantity', 'local_value', 'fees']].style.format({
+        df_display[['date', 'product', 'quantity', 'local_value', 'fees', 'performance_pct']].style.format({
             'quantity': "{:.2f}", 
             'local_value': "€ {:.2f}", 
             'fees': "€ {:.2f}", 
+            'performance_pct': "{:.2f}%",
             'date': lambda x: x.strftime('%d-%m-%Y')
         }),
         width='stretch',

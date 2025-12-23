@@ -25,12 +25,6 @@ def load_all_data():
 data = load_all_data()
 
 df_trans, df_map, df_prices, df_budget, df_alloc = data.values()
-print("DEBUG: df_trans.head():", df_trans.head() if not df_trans.empty else "Vuoto")
-print("DEBUG: df_map.head():", df_map.head() if not df_map.empty else "Vuoto")
-print("DEBUG: df_prices.head():", df_prices.head() if not df_prices.empty else "Vuoto")
-print("DEBUG: Colonne df_prices:", df_prices.columns.tolist() if not df_prices.empty else "Vuoto")
-print("DEBUG: df_prices ha 'mapping_id'? :", 'mapping_id' in df_prices.columns if not df_prices.empty else False)
-print("DEBUG: df_prices ha 'ticker'? :", 'ticker' in df_prices.columns if not df_prices.empty else False)
 if df_trans.empty:
     st.info("👋 Benvenuto! Il database è vuoto. Vai su 'Gestione Dati' per importare il CSV.")
     st.stop()

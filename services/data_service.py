@@ -485,7 +485,7 @@ def sync_prices(df_trans, df_map):
         df_full = df_full.rename(columns={'id_map': 'mapping_id'})
     
     # Usa TUTTI i mapping_id mappati, non solo quelli posseduti
-    all_mapping_ids = df_map['id'].tolist()
+    all_mapping_ids = df_map['mapping_id'].tolist()
     if not all_mapping_ids: return 0
 
     df_prices_all = get_data("prices")
@@ -514,7 +514,7 @@ def sync_prices(df_trans, df_map):
         print(f"end_date {end_date}")
         
         # Ottieni il ticker per il download
-        ticker_row = df_map[df_map['id'] == m_id]
+        ticker_row = df_map[df_map['mapping_id'] == m_id]
         if ticker_row.empty:
             bar.progress((i + 1) / len(all_mapping_ids))
             continue
@@ -524,7 +524,7 @@ def sync_prices(df_trans, df_map):
         needs_update = True
         
         if not df_prices_all.empty:
-            existing_prices = df_prices_all[df_prices_all['mapping_id'] == m_id]
+            existing_prices = df_prices_all[df_prices_all['ticker'] == t]
             if not existing_prices.empty:
                 last_date = existing_prices['date'].max().date()
                 print(f"last_date in DB {last_date}")

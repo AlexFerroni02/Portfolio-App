@@ -350,9 +350,9 @@ def plot_allocation_pie(data: Dict[str, float], title: str) -> go.Figure:
     # Applica stile mobile
     return style_chart_for_mobile(fig)
 
-def plot_price_history(df_prices: pd.DataFrame, ticker: str) -> go.Figure:
+def plot_price_history(df_prices: pd.DataFrame, ticker: str, df_asset_trans: pd.DataFrame) -> go.Figure:
     """
-    Crea il grafico storico dei prezzi per un asset.
+    Crea il grafico storico dei prezzi per un asset con indicatori delle transazioni.
     """
     if df_prices.empty:
         return None  # Se DataFrame vuoto, restituisci None
@@ -360,6 +360,29 @@ def plot_price_history(df_prices: pd.DataFrame, ticker: str) -> go.Figure:
     # Crea grafico a linea con Plotly Express
     fig = px.line(df_prices, x='date', y='close_price', title=f"Andamento {ticker}")
     fig.update_traces(line_color='#00CC96')  # Colore linea verde
+    
+    # Aggiungi punti rossi per le transazioni
+    if not df_asset_trans.empty:
+        # Filtra le date delle transazioni che hanno un prezzo corrispondente
+        trans_dates = df_asset_trans['date'].dropna().unique()
+        trans_prices = []
+        trans_dates_filtered = []
+        for d in trans_dates:
+            price_row = df_prices[df_prices['date'] == d]
+            if not price_row.empty:
+                trans_prices.append(price_row['close_price'].iloc[0])
+                trans_dates_filtered.append(d)
+        
+        if trans_dates_filtered:
+            fig.add_trace(go.Scatter(
+                x=trans_dates_filtered,
+                y=trans_prices,
+                mode='markers',
+                marker=dict(color='red', size=10, symbol='diamond', line=dict(color='white', width=1)),
+                name='Transazioni',
+                hovertemplate='Transazione: %{x}<br>Prezzo: €%{y:.2f}<extra></extra>'
+            ))
+    
     # Applica stile mobile
     return style_chart_for_mobile(fig)
 
