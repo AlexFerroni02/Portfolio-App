@@ -1,5 +1,6 @@
 import pandas as pd
 import json
+import yfinance as yf
 from typing import Dict, Any
 
 def get_owned_assets(df_trans: pd.DataFrame, df_map: pd.DataFrame) -> pd.DataFrame:
@@ -31,12 +32,24 @@ def get_asset_kpis(mapping_id: int, owned_assets: pd.DataFrame, df_asset_trans: 
     asset_info = owned_assets[owned_assets['mapping_id'] == mapping_id].iloc[0]
     qty = asset_info['quantity']
     invested = -df_asset_trans['local_value'].sum()
-    last_price = asset_prices.iloc[-1]['close_price'] if not asset_prices.empty else 0
-    curr_val = qty * last_price
-    pnl = curr_val - invested
     map_row = df_map[df_map['id'] == mapping_id].iloc[0] if not df_map.empty else {}
     ticker = map_row['ticker'] if 'ticker' in map_row else None
     product_name = asset_info['product']
+    
+    # Scarica il prezzo più aggiornato possibile
+    last_price = asset_prices.iloc[-1]['close_price'] if not asset_prices.empty else 0
+    if ticker:
+        try:
+            # Prova a scaricare il prezzo attuale da Yahoo Finance
+            current_data = yf.Ticker(ticker).history(period='1d')
+            if not current_data.empty:
+                last_price = current_data['Close'].iloc[-1]
+        except Exception:
+            # Fallback al prezzo storico
+            pass
+    
+    curr_val = qty * last_price
+    pnl = curr_val - invested
     return {
         "quantity": qty,
         "last_price": last_price,
@@ -65,3 +78,16 @@ def get_asset_allocation_data(mapping_id: int, df_alloc: pd.DataFrame) -> tuple[
         except (json.JSONDecodeError, TypeError):
             pass
     return geo_data, sec_data
+
+def get_current_price(ticker: str) -> float:
+    """
+    Scarica il prezzo attuale di un ticker da Yahoo Finance.
+    """
+    try:
+        data = yf.Ticker(ticker).history(period='1d')
+        if not data.empty:
+            return data['Close'].iloc[-1]
+        else:
+            return 0.0
+    except Exception:
+        return 0.0

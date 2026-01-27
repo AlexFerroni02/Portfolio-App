@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 def calculate_portfolio_view(df_trans, df_map, df_prices):
@@ -11,8 +12,6 @@ def calculate_portfolio_view(df_trans, df_map, df_prices):
         df_full = df_full.rename(columns={'id_map': 'mapping_id'})
     if 'mapping_id' not in df_full.columns:
         df_full['mapping_id'] = pd.NA
-    print("DEBUG calculate_portfolio_view: df_full.head():", df_full.head())
-    print("DEBUG: mapping_id presenti (non NaN):", df_full['mapping_id'].notna().sum())
     # Join prezzi e mapping su mapping_id
     if not df_prices.empty:
         last_p = df_prices.sort_values('date').groupby('mapping_id').tail(1).set_index('mapping_id')['close_price']
@@ -22,17 +21,14 @@ def calculate_portfolio_view(df_trans, df_map, df_prices):
         quantity=('quantity', 'sum'),
         local_value=('local_value', 'sum')
     ).reset_index()
-    print("DEBUG: view dopo groupby.head():", view.head())
     view = view[view['quantity'] > 0.001].copy()
     view['net_invested'] = -view['local_value']
     view['curr_price'] = view['mapping_id'].map(last_p)
-    print("DEBUG: view con curr_price.head():", view[['mapping_id', 'curr_price']].head())
     view['mkt_val'] = view['quantity'] * view['curr_price']
     view['pnl'] = view['mkt_val'] - view['net_invested']
-    view['pnl%'] = (view['pnl'] / view['net_invested'].replace(0, pd.NA)) * 100
+    view['pnl%'] = (view['pnl'] / view['net_invested'].replace(0, np.nan)) * 100
     # Join per ottenere il ticker solo per visualizzazione
     view = view.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
-    print("DEBUG: assets_view finale.head():", view.head())
     return view.fillna({'curr_price': 0, 'mkt_val': 0, 'pnl': 0, 'pnl%': 0})
 
 def calculate_liquidity(df_budget: pd.DataFrame, df_trans: pd.DataFrame) -> tuple[float, str]:

@@ -11,6 +11,9 @@ from services.data_service import (
     fetch_justetf_allocation_robust
 )
 
+# Disabilita warning pandas per downcasting
+pd.set_option('future.no_silent_downcasting', True)
+
 CATEGORIE_ASSET = ["Azionario", "Obbligazionario", "Gold", "Liquidità"]
 
 def render_import_tab():
@@ -23,7 +26,6 @@ def render_import_tab():
             if not new_df.empty:
                 save_data(new_df, "transactions", method='append')
                 st.success(f"✅ Importate {len(new_df)} nuove transazioni!")
-                st.rerun()
             else:
                 st.info("Nessuna nuova transazione trovata.")
 
@@ -69,7 +71,6 @@ def render_mapping_tab():
         df_to_process.drop_duplicates(subset=['isin'], keep='last', inplace=True)
         save_data(df_to_process, "mapping", method='replace')
         st.success("✅ Mappatura aggiornata con successo!")
-        st.rerun()
 
 def render_prices_tab():
     st.write("Scarica gli ultimi prezzi di chiusura da Yahoo Finance **solo per gli asset che possiedi**.")
@@ -110,7 +111,6 @@ def render_budget_tab(initial_balance_exists: bool):
             if rows_to_add:
                 save_data(pd.DataFrame(rows_to_add), "budget", method='append')
                 st.success(f"✅ Salvati {len(rows_to_add)} nuovi movimenti!")
-                st.rerun()
     st.divider()
     st.subheader("Storico Movimenti (Modifica o Elimina)")
     df_budget_all = get_data("budget")
@@ -137,6 +137,11 @@ def render_budget_tab(initial_balance_exists: bool):
 
 def render_allocation_tab():
     st.subheader("Scarica e Modifica Dati di Allocazione (X-Ray)")
+
+    # Controlli per evitare comportamenti strani della pagina
+    if 'allocation_data_modified' not in st.session_state:
+        st.session_state.allocation_data_modified = False
+
     df_map, df_trans, df_alloc = get_data("mapping"), get_data("transactions"), get_data("asset_allocation")
     if df_map.empty or df_trans.empty:
         st.warning("Mancano transazioni o mappatura.")
@@ -144,19 +149,32 @@ def render_allocation_tab():
     df_full = df_trans.merge(df_map, on='isin', how='left')
     holdings = df_full.groupby(['product', 'ticker', 'isin']).agg(quantity=('quantity', 'sum')).reset_index()
     view = holdings[holdings['quantity'] > 0.001].copy()
-    options = view.apply(lambda x: f"{x['product']} ({x['ticker']})", axis=1).unique()
+    
+    # Crea un dizionario per mappare la stringa visualizzata all'ISIN
+    display_to_isin = {}
+    options = []
+    for _, row in view.iterrows():
+        display_str = f"{row['product']} ({row['ticker']})"
+        display_to_isin[display_str] = row['isin']
+        options.append(display_str)
+    
     st.subheader("1. Scarica Nuovi Dati")
     col_sel, col_btn = st.columns([3, 1])
     selected_option = col_sel.selectbox("Seleziona un asset da analizzare:", options, key="asset_selector_alloc")
     if col_btn.button("⚡ Analizza Asset (JustETF)", type="primary"):
         with st.spinner("Scraping in corso..."):
-            isin = selected_option.split('(')[-1].replace(')', '').strip()
-            geo_dict, sec_dict = fetch_justetf_allocation_robust(isin)
-            if geo_dict or sec_dict:
-                st.session_state.scraped_data = {'geo': geo_dict, 'sec': sec_dict, 'isin': isin}
-                st.success("✅ Dati scaricati! Vai alla sezione 2 per salvarli.")
-            else:
-                st.error("❌ Impossibile scaricare i dati. Riprova più tardi.")
+            try:
+                isin = display_to_isin[selected_option]
+                geo_dict, sec_dict = fetch_justetf_allocation_robust(isin)
+                if geo_dict or sec_dict:
+                    st.session_state.scraped_data = {'geo': geo_dict, 'sec': sec_dict, 'isin': isin}
+                    st.success(f"✅ Dati scaricati! Paesi: {len(geo_dict)}, Settori: {len(sec_dict)}")
+                else:
+                    st.error("❌ Nessun dato trovato. Il sito JustETF potrebbe aver cambiato struttura o l'ISIN non è valido.")
+                    st.info("💡 Prova a inserire i dati manualmente nella sezione sottostante.")
+            except Exception as e:
+                st.error(f"❌ Errore durante lo scraping: {str(e)}")
+                st.info("💡 Prova a inserire i dati manualmente nella sezione sottostante.")
     
     if st.session_state.get('scraped_data'):
         st.subheader("2. Verifica e Salva Dati")
@@ -172,11 +190,12 @@ def render_allocation_tab():
                     # Trova mapping_id dall'ISIN
                     mapping_row = df_map[df_map['isin'] == data['isin']]
                     if not mapping_row.empty:
-                        mapping_id = mapping_row['id'].iloc[0]
+                        mapping_id = int(mapping_row['id'].iloc[0])
                         save_allocation_json(mapping_id, geo_parsed, sec_parsed)
                         st.success("✅ Dati salvati!")
                         del st.session_state.scraped_data
-                        st.rerun()
+                        # Segnala che i dati sono stati modificati
+                        st.session_state.allocation_data_modified = True
                     else:
                         st.error("❌ ISIN non trovato nella mappatura.")
                 except json.JSONDecodeError:
@@ -184,29 +203,129 @@ def render_allocation_tab():
     
     st.divider()
     st.subheader("3. Modifica Dati Esistenti")
-    if not df_alloc.empty:
-        # Merge per aggiungere ticker a df_alloc
-        df_alloc_with_ticker = df_alloc.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
-        ticker_options = df_alloc_with_ticker['ticker'].unique()
-        ticker_to_edit = st.selectbox("Seleziona un asset da modificare:", ticker_options, key="alloc_ticker_edit")
-        if ticker_to_edit:
-            asset_data = df_alloc_with_ticker[df_alloc_with_ticker['ticker'] == ticker_to_edit].iloc[0]
-            with st.form("edit_allocation_form"):
-                st.write(f"**Modifica per {ticker_to_edit}**")
+    # Merge per aggiungere ticker a df_alloc (se esiste)
+    df_alloc_with_ticker = df_alloc.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left') if not df_alloc.empty else pd.DataFrame()
+    
+    # Ottieni tutti i ticker posseduti (da holdings)
+    all_tickers = view['ticker'].unique()
+    
+    ticker_options = sorted(all_tickers)
+    
+    ticker_to_edit = st.selectbox("Seleziona un asset da modificare:", ticker_options, key="alloc_ticker_edit")
+    if ticker_to_edit:
+        # Cerca dati esistenti per questo ticker
+        asset_data = None
+        if not df_alloc_with_ticker.empty:
+            asset_row = df_alloc_with_ticker[df_alloc_with_ticker['ticker'] == ticker_to_edit]
+            if not asset_row.empty:
+                asset_data = asset_row.iloc[0]
+        
+        with st.form("edit_allocation_form"):
+            st.write(f"**Modifica per {ticker_to_edit}**")
+            if asset_data is not None:
+                # Dati esistenti
                 geo_edit = st.text_area("Geografia (JSON)", value=json.dumps(asset_data.get('geography_json', {}), indent=2), height=150)
                 sec_edit = st.text_area("Settori (JSON)", value=json.dumps(asset_data.get('sector_json', {}), indent=2), height=150)
-                if st.form_submit_button("💾 Aggiorna"):
-                    try:
-                        geo_parsed = json.loads(geo_edit)
-                        sec_parsed = json.loads(sec_edit)
-                        mapping_id = asset_data['mapping_id']
+            else:
+                # Nessun dato esistente, campi vuoti per inserimento manuale
+                geo_edit = st.text_area("Geografia (JSON)", value="{}", height=150, placeholder="Inserisci manualmente, es: {\"Italia\": 50, \"USA\": 30, \"Altri\": 20}")
+                sec_edit = st.text_area("Settori (JSON)", value="{}", height=150, placeholder="Inserisci manualmente, es: {\"Tecnologia\": 40, \"Finanza\": 30, \"Altro\": 30}")
+            
+            if st.form_submit_button("💾 Aggiorna/Salva"):
+                try:
+                    geo_parsed = json.loads(geo_edit)
+                    sec_parsed = json.loads(sec_edit)
+                    # Trova mapping_id dal ticker
+                    mapping_row = df_map[df_map['ticker'] == ticker_to_edit]
+                    if not mapping_row.empty:
+                        mapping_id = int(mapping_row['id'].iloc[0])
                         save_allocation_json(mapping_id, geo_parsed, sec_parsed)
-                        st.success("✅ Aggiornato!")
-                        st.rerun()
-                    except json.JSONDecodeError:
-                        st.error("❌ JSON non valido.")
+                        st.success("✅ Salvato!")
+                        # Segnala che i dati sono stati modificati
+                        st.session_state.allocation_data_modified = True
+                    else:
+                        st.error(f"❌ Ticker '{ticker_to_edit}' non trovato nella mappatura.")
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ JSON non valido: {e}")
+                except Exception as e:
+                    st.error(f"❌ Errore salvataggio: {e}")
+
+    # --- 4. TABELLE RIEPILOGATIVE ---
+    st.divider()
+    col_title, col_refresh = st.columns([3, 1])
+    with col_title:
+        st.subheader("4. 📊 Riepilogo Allocazioni per Ticker")
+    with col_refresh:
+        if st.button("🔄", help="Aggiorna vista dati"):
+            st.cache_data.clear()
+            st.session_state.allocation_data_modified = False
+            st.rerun()
+
+    # Mostra messaggio se i dati sono stati modificati
+    if st.session_state.get('allocation_data_modified', False):
+        st.info("📝 **Dati modificati!** Clicca '🔄' per vedere gli aggiornamenti.")
+
+    if not df_alloc.empty and not df_map.empty:
+        # Unisci dati allocazione con mapping per ottenere ticker
+        df_alloc_with_ticker = df_alloc.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
+
+        # Crea tabella geografia
+        st.markdown("#### 🌍 Allocazione Geografica per Ticker")
+        geo_rows = []
+        for _, row in df_alloc_with_ticker.iterrows():
+            if row.get('geography_json'):
+                try:
+                    geo_data = json.loads(row['geography_json']) if isinstance(row['geography_json'], str) else row['geography_json']
+                    geo_data['Ticker'] = row['ticker']
+                    geo_rows.append(geo_data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+        if geo_rows:
+            df_geo_pivot = pd.DataFrame(geo_rows).set_index('Ticker').fillna(0)
+            # Calcola totale per riga (sostituendo temporaneamente zeri con 0 per calcolo)
+            df_geo_numeric = df_geo_pivot.replace(0, 0).astype(float)
+            df_geo_pivot['Totale'] = df_geo_numeric.sum(axis=1)
+            # Ordina colonne per importanza (paesi con valori più alti prima, totale alla fine)
+            col_sums = df_geo_numeric.sum().sort_values(ascending=False)
+            ordered_cols = col_sums.index.tolist() + ['Totale']
+            df_geo_pivot = df_geo_pivot[ordered_cols]
+
+            # Converti tutto a stringa per evitare problemi di tipo con PyArrow
+            df_geo_display = df_geo_pivot.applymap(lambda x: '-' if x == 0 else f"{x:.1f}%" if isinstance(x, (int, float)) else str(x))
+            st.dataframe(df_geo_display, width='stretch')
+        else:
+            st.info("Nessun dato geografico disponibile.")
+
+        # Crea tabella settori
+        st.markdown("#### 🧬 Allocazione Settoriale per Ticker")
+        sec_rows = []
+        for _, row in df_alloc_with_ticker.iterrows():
+            if row.get('sector_json'):
+                try:
+                    sec_data = json.loads(row['sector_json']) if isinstance(row['sector_json'], str) else row['sector_json']
+                    sec_data['Ticker'] = row['ticker']
+                    sec_rows.append(sec_data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+        if sec_rows:
+            df_sec_pivot = pd.DataFrame(sec_rows).set_index('Ticker').fillna(0)
+            # Calcola totale per riga (sostituendo temporaneamente zeri con 0 per calcolo)
+            df_sec_numeric = df_sec_pivot.replace(0, 0).astype(float)
+            df_sec_pivot['Totale'] = df_sec_numeric.sum(axis=1)
+            # Ordina colonne per importanza (settori con valori più alti prima, totale alla fine)
+            col_sums = df_sec_numeric.sum().sort_values(ascending=False)
+            ordered_cols = col_sums.index.tolist() + ['Totale']
+            df_sec_pivot = df_sec_pivot[ordered_cols]
+
+            # Converti tutto a stringa per evitare problemi di tipo con PyArrow
+            df_sec_display = df_sec_pivot.applymap(lambda x: '-' if x == 0 else f"{x:.1f}%" if isinstance(x, (int, float)) else str(x))
+            st.dataframe(df_sec_display, width='stretch')
+        else:
+            st.info("Nessun dato settoriale disponibile.")
     else:
-        st.info("Nessun dato di allocazione ancora salvato.")
+        st.info("Nessun dato di allocazione disponibile.")
 
 def render_net_worth_tab():
     st.subheader("🎯 Gestione Patrimonio Netto")

@@ -17,17 +17,18 @@ CREATE_TABLE_COMMANDS = [
     """,
     """
     CREATE TABLE IF NOT EXISTS mapping (
-        isin VARCHAR(50) PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
+        isin VARCHAR(50) UNIQUE NOT NULL,
         ticker VARCHAR(50),
         category VARCHAR(50)
     );
     """,
     """
     CREATE TABLE IF NOT EXISTS prices (
-        ticker VARCHAR(50),
+        mapping_id INTEGER,
         date DATE,
         close_price NUMERIC(20, 10),
-        PRIMARY KEY (ticker, date)
+        PRIMARY KEY (mapping_id, date)
     );
     """,
     """
@@ -38,6 +39,23 @@ CREATE_TABLE_COMMANDS = [
         category VARCHAR(100),
         amount NUMERIC(20, 2),
         note TEXT
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS asset_allocation (
+        id SERIAL PRIMARY KEY,
+        mapping_id INTEGER,
+        geography_json JSON,
+        sector_json JSON,
+        last_updated TIMESTAMP DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS networth_history (
+        date DATE PRIMARY KEY,
+        net_worth NUMERIC(20, 2),
+        assets_value NUMERIC(20, 2),
+        liquidity NUMERIC(20, 2)
     );
     """,
     """

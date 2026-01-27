@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import unicodedata
 from sqlalchemy import text
 from typing import Optional, Dict, Any, Union
 
@@ -63,22 +64,83 @@ def save_data(df: pd.DataFrame, table_name: str, method: str = 'replace') -> Non
 
 def save_allocation_json(mapping_id: int, geo_dict: Dict[str, float], sec_dict: Dict[str, float]) -> None:
     """
-    Salva i dizionari di allocazione come JSON nel DB usando UPSERT.
+    Salva i dizionari di allocazione come JSON nel DB usando INSERT/UPDATE.
+    Normalizza le chiavi in minuscolo per garantire coerenza con COUNTRY_ALIASES_IT.
+    Aggiusta automaticamente le percentuali per fare 100% usando la voce "altri".
     """
     conn = get_db_connection()
-    geo_json = json.dumps(geo_dict, ensure_ascii=False)
-    sec_json = json.dumps(sec_dict, ensure_ascii=False)
     
-    query = text("""
-        INSERT INTO asset_allocation (mapping_id, geography_json, sector_json, last_updated)
-        VALUES (:m, :g, :s, NOW())
-        ON CONFLICT (mapping_id) DO UPDATE 
-        SET geography_json = :g, sector_json = :s, last_updated = NOW();
-    """)
+    def normalize_and_adjust(data_dict: Dict[str, float], is_geo: bool = False) -> Dict[str, float]:
+        """Normalizza chiavi in minuscolo e aggiusta percentuali a 100%."""
+        if not data_dict:
+            return {}  # Se vuoto, lascia vuoto
+        
+        # Normalizza le chiavi: per geo rimuovi accenti, per settori mantieni
+        def normalize_key(key: str) -> str:
+            if is_geo:
+                # Per paesi: rimuovi accenti e caratteri speciali
+                normalized = unicodedata.normalize('NFD', key)
+                normalized = normalized.encode('ascii', 'ignore').decode('ascii')
+                return normalized.lower().strip()
+            else:
+                # Per settori: mantieni accenti, solo minuscolo e strip
+                return key.lower().strip()
+        
+        normalized = {normalize_key(k): v for k, v in data_dict.items()}
+        
+        # Calcola la somma delle percentuali
+        total = sum(normalized.values())
+        
+        # Se la somma non è 100, aggiusta usando "altri"
+        if abs(total - 100) > 0.01:  # Tolleranza per errori di arrotondamento
+            diff = 100 - total
+            
+            # Se "altri" esiste già, aggiungi/sottrai la differenza
+            if "altri" in normalized:
+                normalized["altri"] += diff
+                # Arrotonda a 2 decimali
+                normalized["altri"] = round(normalized["altri"], 2)
+                # Se "altri" diventa negativo o troppo piccolo, rimuovilo
+                if normalized["altri"] < 0.01:
+                    del normalized["altri"]
+            else:
+                # Se "altri" non esiste, crealo sempre con il valore necessario
+                normalized["altri"] = round(diff, 2)
+                # Se diventa negativo o troppo piccolo, rimuovilo
+                if normalized["altri"] < 0.01:
+                    del normalized["altri"]
+        
+        return normalized
+    
+    # Normalizza e aggiusta entrambi i dizionari
+    geo_dict_normalized = normalize_and_adjust(geo_dict, is_geo=True)
+    sec_dict_normalized = normalize_and_adjust(sec_dict, is_geo=False)
+    
+    geo_json = json.dumps(geo_dict_normalized, ensure_ascii=False)
+    sec_json = json.dumps(sec_dict_normalized, ensure_ascii=False)
     
     try:
         with conn.session as s:
-            s.execute(query, {'m': mapping_id, 'g': geo_json, 's': sec_json})
+            # Prima verifica se esiste già un record per questo mapping_id
+            check_query = text("SELECT COUNT(*) as count FROM asset_allocation WHERE mapping_id = :m")
+            result = s.execute(check_query, {'m': mapping_id}).fetchone()
+            
+            if result[0] > 0:
+                # UPDATE se esiste
+                update_query = text("""
+                    UPDATE asset_allocation 
+                    SET geography_json = :g, sector_json = :s, last_updated = NOW()
+                    WHERE mapping_id = :m
+                """)
+                s.execute(update_query, {'m': mapping_id, 'g': geo_json, 's': sec_json})
+            else:
+                # INSERT se non esiste
+                insert_query = text("""
+                    INSERT INTO asset_allocation (mapping_id, geography_json, sector_json, last_updated)
+                    VALUES (:m, :g, :s, NOW())
+                """)
+                s.execute(insert_query, {'m': mapping_id, 'g': geo_json, 's': sec_json})
+            
             s.commit()
         
         st.cache_data.clear()
