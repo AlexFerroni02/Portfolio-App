@@ -113,3 +113,5 @@ streamlit run app.py
 - playwright install chromium
 - da testare se vengono salvati adeguadamente i nuovi ticker aggiunti
 - anche sul mapper da controllare l aggiunta e la modifica e tutte le cose in Gestione Dati
+- controlla anche che hai aggiunto ID su budget e networth HIstory nel db 
+  e capisci come funziona il serial

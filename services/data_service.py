@@ -479,95 +479,106 @@ def _fetch_justetf_playwright(isin):
         return {}, {}
 
 def sync_prices(df_trans, df_map):
-    if df_trans.empty or df_map.empty: return 0
-    df_full = df_trans.merge(df_map, on='isin', how='left', suffixes=('_trans', '_map'))
-    if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
-        df_full = df_full.rename(columns={'id_map': 'mapping_id'})
-    
-    # Usa TUTTI i mapping_id mappati, non solo quelli posseduti
-    all_mapping_ids = df_map['id'].tolist()
-    if not all_mapping_ids: return 0
+    """
+    Scarica i prezzi da Yahoo Finance solo per gli asset posseduti.
+    Esegue un download INCREMENTALE (scarica solo i giorni mancanti).
+    """
+    if df_trans.empty or df_map.empty:
+        return 0
 
+    # 1. Identifica gli asset attualmente posseduti
+    holdings = df_trans.groupby('isin')['quantity'].sum()
+    owned_isins = holdings[holdings > 0].index.tolist()
+    
+    df_map_owned = df_map[df_map['isin'].isin(owned_isins)]
+    if df_map_owned.empty:
+        st.info("Nessun asset attualmente posseduto trovato tra quelli mappati.")
+        return 0
+
+    owned_mapping_ids = df_map_owned['id'].tolist()
+    
+    # Carica i prezzi esistenti
     df_prices_all = get_data("prices")
     if not df_prices_all.empty:
-        df_prices_all['date'] = pd.to_datetime(df_prices_all['date'], errors='coerce').dt.tz_localize(None).dt.normalize()
-    
+        df_prices_all['date'] = pd.to_datetime(df_prices_all['date']).dt.normalize()
+
     new_data = []
     errors = []
-    bar = st.progress(0, text="Sincronizzazione prezzi...")
+    bar = st.progress(0, text="Analisi asset posseduti...")
     
     today = datetime.now().date()
 
-    for i, m_id in enumerate(all_mapping_ids):
-        # Trova la data massima di possesso per questo mapping_id
-        max_date = df_full[df_full['mapping_id'] == m_id]['date'].max()
-        print(f"DEBUG sync_prices: m_id {m_id}, max_date {max_date}")
-        if pd.isna(max_date):
-            print("Skipping, no possession")
-            bar.progress((i + 1) / len(all_mapping_ids))
-            continue
-        
-        # End date = max_date + 1 giorno (per includere l'ultimo giorno di possesso)
-        end_date = (max_date + timedelta(days=1)).date()
-        if end_date > today:
-            end_date = today
-        print(f"end_date {end_date}")
-        
-        # Ottieni il ticker per il download
-        ticker_row = df_map[df_map['id'] == m_id]
+    for i, m_id in enumerate(owned_mapping_ids):
+        ticker_row = df_map_owned[df_map_owned['id'] == m_id]
         if ticker_row.empty:
-            bar.progress((i + 1) / len(all_mapping_ids))
             continue
+        
         t = ticker_row['ticker'].iloc[0]
         
-        start_date = "2020-01-01"
-        needs_update = True
+        # --- LOGICA INCREMENTALE ---
+        start_date = datetime(2020, 1, 1).date() # Default se non ho dati
         
         if not df_prices_all.empty:
             existing_prices = df_prices_all[df_prices_all['mapping_id'] == m_id]
             if not existing_prices.empty:
-                last_date = existing_prices['date'].max().date()
-                print(f"last_date in DB {last_date}")
-                if last_date >= end_date:
-                    print("Already updated")
-                    needs_update = False
+                last_date_in_db = existing_prices['date'].max().date()
+                
+                # Se abbiamo dati recenti, scarichiamo da (ultimo_dato + 1 giorno)
+                if last_date_in_db >= today - timedelta(days=1):
+                    # Già aggiornato a ieri o oggi, salto
+                    bar.progress((i + 1) / len(owned_mapping_ids))
+                    continue
+                else:
+                    start_date = last_date_in_db + timedelta(days=1)
         
-        if needs_update:
-            try:
-                hist = yf.download(t, start=start_date, end=end_date + timedelta(days=1), progress=False)
-                if not hist.empty:
-                    hist = hist[['Close']].reset_index()
-                    hist.columns = ['date', 'close_price']
-                    hist['date'] = pd.to_datetime(hist['date']).dt.normalize()
-                    hist['mapping_id'] = m_id  # Salva con mapping_id corretto
-                    new_data.extend(hist.to_dict('records'))
-                    print(f"Downloaded {len(hist)} prices for {t}")
-            except Exception as e:
-                errors.append(t)
-                print(f"Error for {t}: {e}")
-        bar.progress((i + 1) / len(all_mapping_ids))
-    
+        # Se start_date è oggi o futuro, non scaricare nulla
+        if start_date > today:
+             bar.progress((i + 1) / len(owned_mapping_ids))
+             continue
+
+        try:
+            bar.progress((i + 1) / len(owned_mapping_ids), text=f"Scaricamento {t} dal {start_date}...")
+            
+            # Scarica solo il delta mancante
+            hist = yf.download(t, start=start_date, end=today + timedelta(days=1), progress=False)
+            
+            if not hist.empty:
+                # Gestione colonne MultiIndex (fix per versioni recenti di yfinance)
+                if isinstance(hist.columns, pd.MultiIndex):
+                    hist.columns = hist.columns.get_level_values(0)
+                
+                hist = hist[['Close']].reset_index()
+                hist.rename(columns={'Date': 'date', 'Close': 'close_price'}, inplace=True)
+                hist['mapping_id'] = m_id
+                hist['date'] = pd.to_datetime(hist['date']).dt.normalize() # Normalize subito
+                new_data.append(hist)
+            else:
+                # Se è vuoto, potrebbe essere festa o errore, ma non bloccante
+                pass
+
+        except Exception as e:
+            errors.append(f"{t}: {str(e)}")
+            
     bar.empty()
+
     if errors:
-        st.warning(f"Problemi con alcuni ticker: {', '.join(errors)}")
+        st.warning(f"Errori nel download: {'; '.join(errors)}")
 
     if new_data:
-        df_new = pd.DataFrame(new_data)
-        df_new['date'] = pd.to_datetime(df_new['date']).dt.normalize()
+        df_new = pd.concat(new_data, ignore_index=True)
         
-        # Unisci e rimuovi duplicati
-        before = len(df_prices_all)
+        # Concatena con il vecchio dataframe
         df_combined = pd.concat([df_prices_all, df_new], ignore_index=True)
+        
+        # Rimuovi duplicati (priorità ai nuovi dati in caso di sovrapposizione)
         df_combined.drop_duplicates(subset=['date', 'mapping_id'], keep='last', inplace=True)
-        after = len(df_combined)
-        added = after - before
-
-        if added > 0:
-            save_data(df_combined, "prices", method='replace')
-            st.success(f"✅ Aggiunti {added} nuovi prezzi.")
-        else:
-            st.info("✅ Prezzi già aggiornati, nessun nuovo dato aggiunto.")
-        return added
+        
+        added_count = len(df_combined) - len(df_prices_all)
+        
+        if added_count > 0:
+            save_data(df_combined.sort_values(['mapping_id', 'date']), "prices", method='replace')
+            st.success(f"✅ Aggiornati {added_count} prezzi.")
+            return added_count
     
-    st.info("✅ Prezzi già aggiornati, nessun nuovo dato aggiunto.")
+    st.info("✅ Prezzi già allineati.")
     return 0
