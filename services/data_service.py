@@ -516,25 +516,12 @@ def _fetch_justetf_playwright(isin):
         return {}, {}
 
 def sync_prices(df_trans, df_map):
-<<<<<<< HEAD
     """
     Scarica i prezzi da Yahoo Finance solo per gli asset posseduti.
     Esegue un download INCREMENTALE (scarica solo i giorni mancanti).
     """
     if df_trans.empty or df_map.empty:
         return 0
-=======
-    if df_trans.empty or df_map.empty: return 0
-    df_full = df_trans.merge(df_map, on='isin', how='left', suffixes=('_trans', '_map'))
-    if 'mapping_id' not in df_full.columns and 'id_map' in df_full.columns:
-        df_full = df_full.rename(columns={'id_map': 'mapping_id'})
-    if 'mapping_id' not in df_full.columns and 'id' in df_full.columns:
-        df_full = df_full.rename(columns={'id': 'mapping_id'})
-    
-    # Usa TUTTI gli id mappati, non solo quelli posseduti
-    all_mapping_ids = df_map['id'].tolist()
-    if not all_mapping_ids: return 0
->>>>>>> 70a4c5681ff908fff206f54f445ca9f1dea8ffc2
 
     # 1. Identifica gli asset attualmente posseduti
     holdings = df_trans.groupby('isin')['quantity'].sum()
