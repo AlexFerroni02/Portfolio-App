@@ -84,62 +84,65 @@ def render_prices_tab():
             st.error("Database transazioni o mappatura vuoto. Impossibile aggiornare i prezzi.")
 
 def render_budget_tab(initial_balance_exists: bool):
-    st.header("➕ Inserimento Rapido Movimenti (Stile Excel)")
-    
+    st.header("➕ Inserimento Rapido Movimenti")
     CATEGORIE_ENTRATE_BASE = ["Stipendio", "Bonus", "Regali", "Dividendi", "Rimborso", "Altro", "Aggiustamento Liquidità"]
     CATEGORIE_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro", "Aggiustamento Liquidità"]
     ALL_CATEGORIES = sorted(list(set(CATEGORIE_ENTRATE_BASE + CATEGORIE_USCITE + ["Saldo Iniziale"])))
     
     if not initial_balance_exists:
-        st.warning("**Imposta il tuo Saldo Iniziale!** Aggiungi una riga con categoria 'Saldo Iniziale' e tipo 'Entrata'.", icon="🎯")
+        CATEGORIE_ENTRATE = ["Saldo Iniziale"] + CATEGORIE_ENTRATE_BASE
+        st.warning("**Imposta il tuo Saldo Iniziale!** Questo è il primo passo fondamentale.", icon="🎯")
     else:
+        CATEGORIE_ENTRATE = CATEGORIE_ENTRATE_BASE
         st.success("✅ Hai già inserito un 'Saldo Iniziale'.", icon="👍")
     
-    st.info("💡 **Inserisci più righe velocemente** - Puoi anche fare copia-incolla da Excel! Clicca '+' per aggiungere righe.")
+    st.info("💡 Inserisci solo gli importi > 0, gli altri verranno ignorati automaticamente.")
     
-    # --- NUOVO FORM COMPATTO ---
-    st.subheader("📝 Nuovi Movimenti")
+    col_date, col_type = st.columns(2)
+    selected_date = col_date.date_input("📅 Data", date.today(), key="batch_date")
+    f_type = col_type.radio("📌 Tipo:", ["Uscita", "Entrata"], horizontal=True, key="budget_type_radio")
     
-    # Crea DataFrame vuoto per nuovi inserimenti
-    if 'new_budget_rows' not in st.session_state:
-        st.session_state.new_budget_rows = pd.DataFrame([
-            {'date': date.today(), 'type': 'Uscita', 'category': 'Spesa Alimentare', 'amount': 0.0, 'note': ''}
-        ])
+    active_categories = CATEGORIE_USCITE if f_type == "Uscita" else CATEGORIE_ENTRATE
     
-    new_entries = st.data_editor(
-        st.session_state.new_budget_rows,
-        num_rows="dynamic",
-        width='stretch',
-        hide_index=True,
-        key="new_budget_editor",
-        column_config={
-            "date": st.column_config.DateColumn("📅 Data", format="DD/MM/YYYY", required=True, default=date.today()),
-            "type": st.column_config.SelectboxColumn("📌 Tipo", options=["Entrata", "Uscita"], required=True, default="Uscita"),
-            "category": st.column_config.SelectboxColumn("🏷️ Categoria", options=ALL_CATEGORIES, required=True),
-            "amount": st.column_config.NumberColumn("💰 Importo", format="€ %.2f", required=True, min_value=0.0),
-            "note": st.column_config.TextColumn("📝 Note", default="")
-        }
-    )
-    
-    col_save, col_clear = st.columns(2)
-    with col_save:
-        if st.button("💾 Salva Tutti i Movimenti", type="primary", use_container_width=True):
-            df_new = pd.DataFrame(new_entries)
-            # Filtra solo le righe con importo > 0
-            df_to_add = df_new[df_new['amount'] > 0].copy()
-            if not df_to_add.empty:
-                df_to_add['date'] = pd.to_datetime(df_to_add['date'])
-                save_data(df_to_add, "budget", method='append')
-                st.success(f"✅ Salvati {len(df_to_add)} movimenti!")
-                # Reset form
-                del st.session_state.new_budget_rows
-                st.rerun()
+    with st.form("batch_form", clear_on_submit=True):
+        st.subheader("🔴 Inserisci Uscite" if f_type == "Uscita" else "🟢 Inserisci Entrate")
+        
+        # Layout compatto: 3 categorie per riga
+        for i in range(0, len(active_categories), 3):
+            cols = st.columns(3)
+            for j, col in enumerate(cols):
+                if i + j < len(active_categories):
+                    cat = active_categories[i + j]
+                    with col:
+                        st.number_input(
+                            f"💰 {cat}", 
+                            key=f"movimento_{cat}", 
+                            min_value=0.0, 
+                            value=0.0, 
+                            format="%.2f",
+                            help=f"Inserisci importo per {cat}"
+                        )
+        
+        st.divider()
+        submitted = st.form_submit_button("💾 Salva Movimenti", type="primary", use_container_width=True)
+        
+        if submitted:
+            rows_to_add = []
+            for cat in active_categories:
+                amount = st.session_state.get(f"movimento_{cat}", 0.0)
+                if amount > 0:
+                    rows_to_add.append({
+                        'date': pd.to_datetime(selected_date), 
+                        'type': f_type, 
+                        'category': cat, 
+                        'amount': amount, 
+                        'note': ''
+                    })
+            if rows_to_add:
+                save_data(pd.DataFrame(rows_to_add), "budget", method='append')
+                st.success(f"✅ Salvati {len(rows_to_add)} nuovi movimenti!")
             else:
-                st.warning("⚠️ Inserisci almeno un movimento con importo > 0")
-    with col_clear:
-        if st.button("🗑️ Pulisci Form", use_container_width=True):
-            del st.session_state.new_budget_rows
-            st.rerun()
+                st.warning("⚠️ Nessun importo inserito. Inserisci almeno un valore > 0.")
     
     st.divider()
     
