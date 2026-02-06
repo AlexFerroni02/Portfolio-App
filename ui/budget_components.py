@@ -159,6 +159,54 @@ def render_expense_trend_chart(df_budget: pd.DataFrame, months: int = 6):
     st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
 
 
+def render_investment_trend(df_budget: pd.DataFrame, months: int = 6):
+    """Mostra il trend degli investimenti negli ultimi N mesi."""
+    st.subheader(f"📈 Trend Investimenti (Ultimi {months} Mesi)")
+    
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    df = df_budget.copy()
+    df['mese'] = df['date'].dt.to_period('M').astype(str)
+    
+    # Filtra ultimi N mesi e solo investimenti
+    mesi_unici = sorted(df['mese'].unique(), reverse=True)[:months]
+    df_filtered = df[(df['mese'].isin(mesi_unici)) & (df['type'] == 'Uscita') & (df['category'] == 'Investimento')]
+    
+    if df_filtered.empty:
+        st.info("Nessun investimento registrato negli ultimi mesi.")
+        return
+    
+    # Aggrega per mese
+    df_agg = df_filtered.groupby('mese')['amount'].sum().reset_index()
+    df_agg = df_agg.sort_values('mese')
+    
+    # Crea grafico
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        x=df_agg['mese'], 
+        y=df_agg['amount'],
+        marker_color='#007bff',
+        text=[f"€ {v:,.0f}" for v in df_agg['amount']],
+        textposition='outside'
+    ))
+    
+    # Linea media
+    media_inv = df_agg['amount'].mean()
+    fig.add_hline(y=media_inv, line_dash="dash", line_color="orange", 
+                  annotation_text=f"Media: € {media_inv:,.0f}", annotation_position="right")
+    
+    fig.update_layout(
+        title=None,
+        xaxis_title="Mese",
+        yaxis_title="Importo Investito (€)",
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
 def render_savings_rate_trend(df_budget: pd.DataFrame, months: int = 6):
     """Mostra l'andamento del tasso di risparmio."""
     st.subheader(f"📈 Andamento Tasso di Risparmio")
@@ -214,7 +262,7 @@ def render_savings_rate_trend(df_budget: pd.DataFrame, months: int = 6):
 
 
 def render_budget_rule_check(df_budget: pd.DataFrame, selected_month: str):
-    """Verifica la regola 50/30/20: 50% necessità, 30% desideri, 20% risparmio."""
+    """Verifica la regola 50/30/20: 50% necessità, 30% desideri, 20% risparmio+investimento."""
     st.subheader("🎯 Verifica Regola 50/30/20")
     
     # Categorie classificate
@@ -232,16 +280,23 @@ def render_budget_rule_check(df_budget: pd.DataFrame, selected_month: str):
         st.warning("Nessuna entrata registrata per questo mese.")
         return
     
-    # Calcola spese per categoria
-    df_spese = df_month[df_month['type'] == 'Uscita']
+    # Calcola spese per categoria (escluso Investimento)
+    df_spese = df_month[(df_month['type'] == 'Uscita') & (df_month['category'] != 'Investimento')]
     spese_necessita = df_spese[df_spese['category'].isin(NECESSITA)]['amount'].sum()
     spese_desideri = df_spese[df_spese['category'].isin(DESIDERI)]['amount'].sum()
-    risparmio = entrate - df_spese['amount'].sum()
+    
+    # Investimenti e risparmio
+    investimenti = df_month[(df_month['type'] == 'Uscita') & (df_month['category'] == 'Investimento')]['amount'].sum()
+    spese_totali = df_spese['amount'].sum()
+    risparmio_puro = entrate - spese_totali - investimenti  # Liquidità risparmiata
+    risparmio_totale = risparmio_puro + investimenti  # Risparmio + Investimento per regola 50/30/20
     
     # Percentuali
     pct_necessita = (spese_necessita / entrate) * 100
     pct_desideri = (spese_desideri / entrate) * 100
-    pct_risparmio = (risparmio / entrate) * 100
+    pct_risparmio_totale = (risparmio_totale / entrate) * 100
+    pct_investimenti = (investimenti / entrate) * 100
+    pct_risparmio_puro = (risparmio_puro / entrate) * 100
     
     # Layout a colonne
     c1, c2, c3 = st.columns(3)
@@ -267,24 +322,26 @@ def render_budget_rule_check(df_budget: pd.DataFrame, selected_month: str):
         st.caption(f"€ {spese_desideri:,.2f}")
     
     with c3:
-        delta_r = pct_risparmio - 20
+        delta_r = pct_risparmio_totale - 20
         st.metric(
-            "💰 Risparmio", 
-            f"{pct_risparmio:.1f}%",
+            "💰 Risparmio + Investimento", 
+            f"{pct_risparmio_totale:.1f}%",
             delta=f"{delta_r:+.1f}% vs 20%",
             delta_color="normal"
         )
-        st.caption(f"€ {risparmio:,.2f}")
+        # Breakdown dettagliato
+        st.caption(f"💵 Liquidità: € {risparmio_puro:,.2f} ({pct_risparmio_puro:.1f}%)")
+        st.caption(f"📈 Investito: € {investimenti:,.2f} ({pct_investimenti:.1f}%)")
     
     # Grafico a ciambella comparativo
     fig = go.Figure()
     
-    # Valori attuali
+    # Valori attuali - mostra risparmio e investimento separati
     fig.add_trace(go.Pie(
-        values=[pct_necessita, pct_desideri, max(0, pct_risparmio)],
-        labels=['Necessità', 'Desideri', 'Risparmio'],
+        values=[pct_necessita, pct_desideri, max(0, pct_risparmio_puro), max(0, pct_investimenti)],
+        labels=['Necessità', 'Desideri', 'Risparmio', 'Investimento'],
         hole=0.6,
-        marker_colors=['#17a2b8', '#ffc107', '#28a745'],
+        marker_colors=['#17a2b8', '#ffc107', '#28a745', '#007bff'],
         textinfo='label+percent',
         name='Attuale'
     ))
@@ -301,10 +358,10 @@ def render_budget_rule_check(df_budget: pd.DataFrame, selected_month: str):
         st.warning("⚠️ Le spese per necessità superano il 55%. Valuta se puoi ridurre affitto o bollette.")
     if pct_desideri > 35:
         st.warning("⚠️ Le spese per desideri superano il 35%. Considera di ridurre svago e shopping.")
-    if pct_risparmio >= 20:
-        st.success("✅ Ottimo! Stai risparmiando almeno il 20% delle entrate.")
-    elif pct_risparmio > 0:
-        st.info(f"💡 Risparmio positivo ma sotto l'obiettivo. Mancano {20 - pct_risparmio:.1f}% per raggiungere il 20%.")
+    if pct_risparmio_totale >= 20:
+        st.success("✅ Ottimo! Stai risparmiando/investendo almeno il 20% delle entrate.")
+    elif pct_risparmio_totale > 0:
+        st.info(f"💡 Risparmio + Investimento positivo ma sotto l'obiettivo. Mancano {20 - pct_risparmio_totale:.1f}% per raggiungere il 20%.")
 
 
 def render_expense_breakdown(df_budget: pd.DataFrame, months: int = 3):

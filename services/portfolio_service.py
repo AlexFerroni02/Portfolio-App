@@ -31,8 +31,10 @@ def calculate_portfolio_view(df_trans, df_map, df_prices):
     view = view.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
     return view.fillna({'curr_price': 0, 'mkt_val': 0, 'pnl': 0, 'pnl%': 0})
 
-def calculate_liquidity(df_budget: pd.DataFrame, df_trans: pd.DataFrame) -> tuple[float, str]:
-    """Calcola la liquidità finale partendo dal saldo iniziale o, in sua assenza, dai totali."""
+def calculate_liquidity(df_budget: pd.DataFrame, df_trans: pd.DataFrame = None) -> tuple[float, str]:
+    """Calcola la liquidità finale partendo dal saldo iniziale o, in sua assenza, dai totali.
+    Gli investimenti sono calcolati dalla categoria 'Investimento' nel budget, non dalle transazioni DEGIRO.
+    """
     if df_budget.empty:
         return 0.0, "Liquidità"
     df_budget_sorted = df_budget.sort_values('date')
@@ -41,16 +43,19 @@ def calculate_liquidity(df_budget: pd.DataFrame, df_trans: pd.DataFrame) -> tupl
         start_date = initial_balance_entry['date'].iloc[0]
         base_liquidity = initial_balance_entry['amount'].iloc[0]
         budget_to_sum = df_budget_sorted[df_budget_sorted['date'] > start_date]
-        trans_to_sum = df_trans[df_trans['date'] > start_date] if not df_trans.empty else pd.DataFrame()
         other_entrate = budget_to_sum[(budget_to_sum['type'] == 'Entrata') & (budget_to_sum['category'] != 'Saldo Iniziale')]['amount'].sum()
-        all_uscite = budget_to_sum[budget_to_sum['type'] == 'Uscita']['amount'].sum()
-        investments = -trans_to_sum['local_value'].sum() if not trans_to_sum.empty else 0.0
+        # Uscite normali (escluso Investimento)
+        all_uscite = budget_to_sum[(budget_to_sum['type'] == 'Uscita') & (budget_to_sum['category'] != 'Investimento')]['amount'].sum()
+        # Investimenti dal budget
+        investments = budget_to_sum[(budget_to_sum['type'] == 'Uscita') & (budget_to_sum['category'] == 'Investimento')]['amount'].sum()
         final_liquidity = base_liquidity + other_entrate - all_uscite - investments
     else:
         total_entrate = df_budget['amount'][df_budget['type'] == 'Entrata'].sum()
-        total_uscite = df_budget['amount'][df_budget['type'] == 'Uscita'].sum()
-        total_investito_netto = -df_trans['local_value'].sum() if not df_trans.empty else 0.0
-        final_liquidity = total_entrate - total_uscite - total_investito_netto
+        # Uscite normali (escluso Investimento)
+        total_uscite = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] != 'Investimento')]['amount'].sum()
+        # Investimenti dal budget
+        total_investito = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] == 'Investimento')]['amount'].sum()
+        final_liquidity = total_entrate - total_uscite - total_investito
     return final_liquidity, "Liquidità Calcolata"
 
 def get_historical_portfolio(df_trans, df_map, df_prices):

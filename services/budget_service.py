@@ -3,21 +3,21 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from typing import Dict, Tuple
 
-def get_monthly_summary(selected_month: str, df_budget: pd.DataFrame, df_trans: pd.DataFrame) -> Dict[str, float]:
+def get_monthly_summary(selected_month: str, df_budget: pd.DataFrame, df_trans: pd.DataFrame = None) -> Dict[str, float]:
     """
     Calcola un riepilogo finanziario per il mese selezionato.
+    Gli investimenti sono calcolati dalla categoria 'Investimento' nel budget.
     """
     df_month = df_budget[df_budget['date'].dt.strftime('%Y-%m') == selected_month]
 
     entrate = df_month[df_month['type'] == 'Entrata']['amount'].sum()
-    uscite = df_month[df_month['type'] == 'Uscita']['amount'].sum()
+    # Uscite normali (escluso Investimento)
+    uscite = df_month[(df_month['type'] == 'Uscita') & (df_month['category'] != 'Investimento')]['amount'].sum()
     risparmio = entrate - uscite
     savings_rate = (risparmio / entrate * 100) if entrate > 0 else 0
 
-    investito_mese = 0.0
-    if not df_trans.empty:
-        mask_inv = df_trans['date'].dt.strftime('%Y-%m') == selected_month
-        investito_mese = -df_trans[mask_inv]['local_value'].sum()
+    # Investimenti dal budget
+    investito_mese = df_month[(df_month['type'] == 'Uscita') & (df_month['category'] == 'Investimento')]['amount'].sum()
 
     return {
         "entrate": entrate,

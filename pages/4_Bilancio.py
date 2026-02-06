@@ -13,7 +13,8 @@ from ui.budget_components import (
     render_expense_trend_chart,
     render_savings_rate_trend,
     render_budget_rule_check,
-    render_expense_breakdown
+    render_expense_breakdown,
+    render_investment_trend
 )
 
 st.set_page_config(page_title="Bilancio", layout="wide", page_icon="💰")
@@ -66,6 +67,7 @@ with col_trend2:
     render_savings_rate_trend(df_budget, months=6)
 
 render_expense_breakdown(df_budget, months=3)
+render_investment_trend(df_budget, months=6)
 
 st.divider()
 
