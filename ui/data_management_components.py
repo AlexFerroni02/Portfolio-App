@@ -2,8 +2,12 @@ import streamlit as st
 import pandas as pd
 import json
 import numpy as np
-from datetime import date
-from database.connection import get_data, save_data, save_allocation_json
+import uuid
+from datetime import date, datetime
+from database.connection import (
+    get_data, save_data, save_allocation_json, replace_all_mappings,
+    insert_single_transaction, update_transaction, delete_transactions
+)
 from services.data_service import (
     process_new_transactions, 
     calculate_net_worth_snapshot,
@@ -16,7 +20,28 @@ pd.set_option('future.no_silent_downcasting', True)
 
 CATEGORIE_ASSET = ["Azionario", "Obbligazionario", "Gold", "Liquidità"]
 
-def render_import_tab():
+
+# ============================================================
+# TAB TRANSAZIONI (3 sub-tab: Import CSV, Inserimento Manuale, Gestione)
+# ============================================================
+
+def render_transactions_tab():
+    """Tab principale delle transazioni con 3 sub-tab."""
+    sub1, sub2, sub3 = st.tabs([
+        "📥 Importa CSV DEGIRO",
+        "✏️ Inserimento Manuale",
+        "📋 Gestione Transazioni"
+    ])
+    with sub1:
+        _render_degiro_import()
+    with sub2:
+        _render_manual_transaction_form()
+    with sub3:
+        _render_transactions_editor()
+
+
+def _render_degiro_import():
+    """Sub-tab: importazione CSV DEGIRO (funzionalità originale)."""
     st.write("Carica il file `Transactions.csv` di DEGIRO.")
     up = st.file_uploader("Upload CSV", type=['csv'], key="csv_uploader")
     if up and st.button("Importa Transazioni"):
@@ -26,22 +51,281 @@ def render_import_tab():
             if not new_df.empty:
                 save_data(new_df, "transactions", method='append')
                 st.success(f"✅ Importate {len(new_df)} nuove transazioni!")
+                st.rerun()
             else:
                 st.info("Nessuna nuova transazione trovata.")
+
+
+def _render_manual_transaction_form():
+    """Sub-tab: inserimento manuale di una transazione."""
+    st.write("Inserisci manualmente una transazione di acquisto o vendita.")
+    st.caption("⚠️ Ricorda: per un **acquisto** il valore deve essere **negativo** (soldi usciti). "
+               "Per una **vendita** il valore deve essere **positivo** (soldi entrati).")
+
+    df_map = get_data("mapping")
+    df_trans = get_data("transactions")
+
+    # Scegli se usare un asset già mappato o nuovo
+    mode = st.radio(
+        "Tipo di asset:",
+        ["Asset già mappato", "Nuovo asset (ISIN non ancora presente)"],
+        horizontal=True,
+        key="manual_tx_mode"
+    )
+
+    with st.form("manual_transaction_form", clear_on_submit=True):
+        # --- Data e tipo ---
+        col_date, col_type = st.columns(2)
+        tx_date = col_date.date_input("Data transazione", date.today(), key="manual_tx_date")
+        tx_type = col_type.radio("Tipo:", ["Acquisto", "Vendita"], horizontal=True, key="manual_tx_type")
+
+        if mode == "Asset già mappato" and not df_map.empty:
+            # Dropdown degli asset mappati
+            options = []
+            isin_map = {}
+            for _, row in df_map.iterrows():
+                label = f"{row['ticker']} — {row['isin']} ({row['category']})"
+                options.append(label)
+                isin_map[label] = {'isin': row['isin'], 'ticker': row['ticker']}
+
+            selected = st.selectbox("Seleziona asset:", options, key="manual_tx_asset")
+            asset_info = isin_map.get(selected, {})
+            tx_isin = asset_info.get('isin', '')
+            tx_product = asset_info.get('ticker', '')
+
+            # Mostra il prodotto come read-only
+            st.text_input("Prodotto", value=tx_product, disabled=True, key="manual_tx_product_ro")
+        else:
+            # Campi liberi per nuovo asset
+            col_isin, col_prod = st.columns(2)
+            tx_isin = col_isin.text_input("ISIN", placeholder="es. IE00BKM4GZ66", key="manual_tx_isin").strip()
+            tx_product = col_prod.text_input("Nome Prodotto", placeholder="es. iShares MSCI EM", key="manual_tx_product").strip()
+
+        # --- Quantità, Valore, Fees ---
+        col_qty, col_val, col_fees = st.columns(3)
+        tx_qty = col_qty.number_input("Quantità", min_value=0.0, value=0.0, format="%.4f", key="manual_tx_qty")
+        tx_val = col_val.number_input("Valore totale (€)", value=0.0, format="%.2f", key="manual_tx_val",
+                                       help="Negativo per acquisti, positivo per vendite")
+        tx_fees = col_fees.number_input("Commissioni (€)", min_value=0.0, value=0.0, format="%.2f", key="manual_tx_fees")
+
+        submitted = st.form_submit_button("💾 Inserisci Transazione", type="primary")
+
+    if submitted:
+        # Validazione
+        errors = []
+        if not tx_isin:
+            errors.append("ISIN obbligatorio")
+        if not tx_product:
+            errors.append("Nome prodotto obbligatorio")
+        if tx_qty <= 0:
+            errors.append("Quantità deve essere > 0")
+        if tx_val == 0:
+            errors.append("Valore totale non può essere 0")
+
+        if errors:
+            st.error("❌ " + " | ".join(errors))
+        else:
+            # Adatta segno in base al tipo
+            final_qty = tx_qty if tx_type == "Acquisto" else -tx_qty
+            final_val = -abs(tx_val) if tx_type == "Acquisto" else abs(tx_val)
+
+            # Genera ID univoco (prefisso "M_" per distinguere da quelli DEGIRO)
+            tx_id = f"M_{uuid.uuid4().hex[:24]}"
+
+            tx_dict = {
+                'id': tx_id,
+                'date': pd.to_datetime(tx_date),
+                'product': tx_product,
+                'isin': tx_isin,
+                'quantity': final_qty,
+                'local_value': final_val,
+                'fees': abs(tx_fees),
+                'currency': 'EUR'
+            }
+
+            if insert_single_transaction(tx_dict):
+                st.success(f"✅ Transazione inserita! ({tx_type} di {tx_qty} {tx_product})")
+
+                # Controlla se l'ISIN necessita mappatura
+                mapped_isins = df_map['isin'].tolist() if not df_map.empty else []
+                if tx_isin not in mapped_isins:
+                    st.warning(f"⚠️ L'ISIN **{tx_isin}** non è ancora mappato. "
+                               "Vai alla tab **🔗 Mappatura Ticker** per associarlo a un ticker Yahoo.")
+                st.rerun()
+            else:
+                st.error("❌ Errore durante l'inserimento.")
+
+
+def _render_transactions_editor():
+    """Sub-tab: visualizza, modifica ed elimina transazioni esistenti."""
+    st.write("Visualizza e gestisci tutte le transazioni nel database.")
+
+    df_trans = get_data("transactions")
+    if df_trans.empty:
+        st.info("Nessuna transazione nel database.")
+        return
+
+    # Preparazione dati per visualizzazione
+    df_display = df_trans.copy()
+    df_display['date'] = pd.to_datetime(df_display['date']).dt.date
+    df_display = df_display.sort_values('date', ascending=False).reset_index(drop=True)
+
+    # Filtri
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        isins = sorted(df_display['isin'].unique().tolist())
+        filter_isin = st.multiselect("Filtra per ISIN:", isins, key="tx_filter_isin")
+    with col_f2:
+        products = sorted(df_display['product'].unique().tolist())
+        filter_product = st.multiselect("Filtra per Prodotto:", products, key="tx_filter_product")
+    with col_f3:
+        filter_type = st.radio("Tipo:", ["Tutti", "Acquisti", "Vendite"], horizontal=True, key="tx_filter_type")
+
+    # Applica filtri
+    df_filtered = df_display.copy()
+    if filter_isin:
+        df_filtered = df_filtered[df_filtered['isin'].isin(filter_isin)]
+    if filter_product:
+        df_filtered = df_filtered[df_filtered['product'].isin(filter_product)]
+    if filter_type == "Acquisti":
+        df_filtered = df_filtered[df_filtered['quantity'] > 0]
+    elif filter_type == "Vendite":
+        df_filtered = df_filtered[df_filtered['quantity'] < 0]
+
+    st.caption(f"📊 {len(df_filtered)} transazioni trovate su {len(df_display)} totali")
+
+    # Aggiungi colonna di selezione per eliminazione
+    df_edit = df_filtered.copy()
+    df_edit.insert(0, "🗑️", False)
+
+    # Tipo transazione leggibile
+    df_edit.insert(1, "Tipo", df_edit['quantity'].apply(lambda q: "🟢 Acquisto" if q > 0 else "🔴 Vendita"))
+
+    edited = st.data_editor(
+        df_edit,
+        width='stretch',
+        hide_index=True,
+        disabled=["id", "Tipo"],  # ID e tipo calcolato non modificabili
+        column_config={
+            "🗑️": st.column_config.CheckboxColumn("Elimina", required=True),
+            "Tipo": st.column_config.TextColumn("Tipo", disabled=True),
+            "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
+            "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+            "product": st.column_config.TextColumn("Prodotto"),
+            "isin": st.column_config.TextColumn("ISIN"),
+            "quantity": st.column_config.NumberColumn("Quantità", format="%.4f"),
+            "local_value": st.column_config.NumberColumn("Valore (€)", format="€ %.2f"),
+            "fees": st.column_config.NumberColumn("Commissioni (€)", format="€ %.2f"),
+            "currency": st.column_config.TextColumn("Valuta", width="small"),
+        },
+        key="transactions_editor"
+    )
+
+    col_btn1, col_btn2 = st.columns(2)
+
+    # --- ELIMINA SELEZIONATE ---
+    with col_btn1:
+        to_delete = edited[edited["🗑️"] == True]
+        n_del = len(to_delete)
+        if st.button(
+            f"🗑️ Elimina {n_del} selezionate" if n_del > 0 else "🗑️ Elimina selezionate",
+            type="secondary",
+            disabled=(n_del == 0)
+        ):
+            ids_to_delete = to_delete['id'].tolist()
+            deleted = delete_transactions(ids_to_delete)
+            if deleted > 0:
+                st.success(f"✅ Eliminate {deleted} transazioni.")
+                st.rerun()
+            else:
+                st.error("Nessuna transazione eliminata.")
+
+    # --- SALVA MODIFICHE ---
+    with col_btn2:
+        if st.button("💾 Salva Modifiche", type="primary"):
+            # Confronta con i dati originali per trovare le righe modificate
+            df_original = df_filtered.copy()
+            df_edited_clean = edited.drop(columns=["🗑️", "Tipo"]).copy()
+
+            # Allinea gli indici per il confronto
+            df_original = df_original.set_index('id')
+            df_edited_clean = df_edited_clean.set_index('id')
+
+            updated_count = 0
+            for tx_id in df_edited_clean.index:
+                if tx_id not in df_original.index:
+                    continue
+                orig_row = df_original.loc[tx_id]
+                new_row = df_edited_clean.loc[tx_id]
+
+                changes = {}
+                for col in ['date', 'product', 'isin', 'quantity', 'local_value', 'fees', 'currency']:
+                    old_val = orig_row[col]
+                    new_val = new_row[col]
+                    # Confronto con tolleranza per float
+                    if col in ('quantity', 'local_value', 'fees'):
+                        if isinstance(new_val, (int, float)) and isinstance(old_val, (int, float)):
+                            if abs(float(new_val) - float(old_val)) > 0.0001:
+                                changes[col] = float(new_val)
+                        elif str(new_val) != str(old_val):
+                            changes[col] = new_val
+                    elif col == 'date':
+                        # Normalizza per confronto
+                        old_date = pd.to_datetime(old_val).date() if old_val is not None else None
+                        new_date = pd.to_datetime(new_val).date() if new_val is not None else None
+                        if old_date != new_date:
+                            changes[col] = pd.to_datetime(new_val)
+                    else:
+                        if str(new_val).strip() != str(old_val).strip():
+                            changes[col] = str(new_val).strip()
+
+                if changes:
+                    if update_transaction(tx_id, changes):
+                        updated_count += 1
+
+            if updated_count > 0:
+                st.success(f"✅ Aggiornate {updated_count} transazioni.")
+                st.rerun()
+            else:
+                st.info("Nessuna modifica rilevata.")
 
 def render_mapping_tab():
     st.subheader("Modifica, Aggiungi o Elimina Mappature")
     st.caption("Fai doppio clic su una cella per modificarla. Aggiungi una riga in fondo per una nuova mappatura.")
 
-    df_map = get_data("mapping")
+    df_map_full = get_data("mapping")
     df_trans = get_data("transactions")
-    # Filtra solo gli ISIN posseduti (quantità > 0)
+
+    # Calcola ISIN posseduti vs venduti
     if not df_trans.empty:
         holdings = df_trans.groupby('isin')['quantity'].sum()
         owned_isin = holdings[holdings > 0].index.tolist()
-        df_map = df_map[df_map['isin'].isin(owned_isin)]
+        sold_isin = holdings[holdings <= 0].index.tolist()
+    else:
+        owned_isin = []
+        sold_isin = []
 
-    # 1. Reset dell'indice (spesso è questo che appare come colonna extra)
+    # Toggle per mostrare anche gli asset venduti / non più posseduti
+    show_all = st.toggle("📦 Mostra anche asset venduti / non più posseduti", value=False, key="show_sold_assets")
+
+    if show_all:
+        # Mostra tutte le mappature + aggiungi ISIN venduti non ancora mappati
+        df_map = df_map_full.copy()
+        unmapped_sold = [i for i in sold_isin if i not in df_map_full['isin'].values]
+        if unmapped_sold:
+            # Crea righe vuote per gli ISIN venduti non mappati, così l'utente può compilarle
+            new_rows = []
+            for isin in unmapped_sold:
+                new_rows.append({'isin': isin, 'ticker': '', 'category': 'Azionario', 'proxy_ticker': None})
+            df_map = pd.concat([df_map, pd.DataFrame(new_rows)], ignore_index=True)
+            st.info(f"🆕 {len(unmapped_sold)} asset venduti non ancora mappati aggiunti in fondo alla tabella (da compilare).")
+        df_map_hidden = pd.DataFrame()  # Niente di nascosto, è tutto visibile
+    else:
+        # Mostra solo posseduti, nascondi il resto
+        df_map = df_map_full[df_map_full['isin'].isin(owned_isin)].copy()
+        df_map_hidden = df_map_full[~df_map_full['isin'].isin(owned_isin)].copy()
+
+    # 1. Reset dell'indice
     df_map = df_map.reset_index(drop=True)
 
     df_map_edit = df_map.copy()
@@ -52,34 +336,56 @@ def render_mapping_tab():
         df_map_edit = df_map_edit.drop(columns=cols_to_drop)
 
     df_map_edit.insert(0, "Elimina", False)
+
+    # Segna le righe vendute per evidenziarle (solo in modalità show_all)
+    if show_all and not df_trans.empty:
+        df_map_edit.insert(1, "Stato", df_map_edit['isin'].apply(
+            lambda x: "✅ Posseduto" if x in owned_isin else "📦 Venduto"
+        ))
     
-    # 3. Aggiungi "id": None nella configurazione per nasconderla forzatamente
+    # 3. Configurazione colonne
+    col_config = {
+        "Elimina": st.column_config.CheckboxColumn(required=True),
+        "isin": st.column_config.TextColumn("ISIN (Obbligatorio)", required=True),
+        "ticker": st.column_config.TextColumn("Ticker Yahoo (Obbligatorio)", required=True),
+        "category": st.column_config.SelectboxColumn("Categoria (Obbligatorio)", options=CATEGORIE_ASSET, required=True),
+        "proxy_ticker": None,
+        "id": None,
+    }
+    if show_all and not df_trans.empty:
+        col_config["Stato"] = st.column_config.TextColumn("Stato", disabled=True)
+
     edited_df = st.data_editor(df_map_edit, num_rows="dynamic", width='stretch', hide_index=True,
-        column_config={
-            "Elimina": st.column_config.CheckboxColumn(required=True),
-            "isin": st.column_config.TextColumn("ISIN (Obbligatorio)", required=True),
-            "ticker": st.column_config.TextColumn("Ticker Yahoo (Obbligatorio)", required=True),
-            "category": st.column_config.SelectboxColumn("Categoria (Obbligatorio)", options=CATEGORIE_ASSET, required=True,),
-            "proxy_ticker": None,
-            "id": None  # <--- Nascondi forzatamente se dovesse ancora esserci
-        })
+        column_config=col_config)
+
     if st.button("💾 Salva Modifiche Mappatura", type="primary"):
         df_to_process = edited_df.copy()
         df_to_process = df_to_process[df_to_process["Elimina"] == False].drop(columns=["Elimina"])
+        # Rimuovi colonna Stato se presente
+        if "Stato" in df_to_process.columns:
+            df_to_process = df_to_process.drop(columns=["Stato"])
         df_to_process.dropna(subset=['isin'], inplace=True)
         df_to_process = df_to_process[df_to_process['isin'].str.strip() != '']
+        # Rimuovi righe con ticker vuoto o NaN (non compilate)
+        df_to_process['ticker'] = df_to_process['ticker'].fillna('')
+        df_to_process = df_to_process[df_to_process['ticker'].str.strip() != '']
         df_to_process.drop_duplicates(subset=['isin'], keep='last', inplace=True)
-        save_data(df_to_process, "mapping", method='replace')
+        # Riunisci con le mappature nascoste (solo in modalità filtrata)
+        if not df_map_hidden.empty:
+            cols_keep = [c for c in df_map_hidden.columns if c.lower() != 'id']
+            df_to_process = pd.concat([df_to_process, df_map_hidden[cols_keep]], ignore_index=True)
+            df_to_process.drop_duplicates(subset=['isin'], keep='first', inplace=True)
+        replace_all_mappings(df_to_process)
         st.success("✅ Mappatura aggiornata con successo!")
 
 def render_prices_tab():
-    st.write("Scarica gli ultimi prezzi di chiusura da Yahoo Finance **solo per gli asset che possiedi**.")
+    st.write("Scarica gli ultimi prezzi di chiusura da Yahoo Finance per **tutti gli asset mappati** (posseduti e venduti).")
     if st.button("Avvia Sincronizzazione Prezzi"):
         df_trans, df_map = get_data("transactions"), get_data("mapping")
         if not df_map.empty and not df_trans.empty:
             n = sync_prices(df_trans, df_map)
             if n > 0: st.success(f"✅ Aggiornamento completato: {n} nuovi prezzi salvati.")
-            else: st.info("Tutti i prezzi per gli asset posseduti sono già aggiornati.")
+            else: st.info("Tutti i prezzi sono già aggiornati.")
         else:
             st.error("Database transazioni o mappatura vuoto. Impossibile aggiornare i prezzi.")
 

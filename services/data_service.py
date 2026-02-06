@@ -124,6 +124,21 @@ def fetch_justetf_allocation_robust(isin):
         if sec_pw:
             sec_dict.update(sec_pw)
 
+    # --- Calcolo automatico "Altri" come resto a 100% ---
+    def _add_altri(d: dict) -> dict:
+        if not d:
+            return d
+        total = sum(d.values())
+        # Rimuovi eventuale "Altri" già presente (potrebbe arrivare da BS/API)
+        d = {k: v for k, v in d.items() if k.lower() != 'altri'}
+        total = round(sum(d.values()), 2)
+        if total < 99.99:
+            d['Altri'] = round(100 - total, 2)
+        return d
+
+    geo_dict = _add_altri(geo_dict)
+    sec_dict = _add_altri(sec_dict)
+
     return geo_dict, sec_dict
 
 
@@ -372,8 +387,8 @@ def _fetch_justetf_beautifulsoup(isin):
 
 def _fetch_justetf_playwright(isin):
     """
-    Usa Playwright - più leggero e auto-gestito di Selenium.
-    Gestisce cookie banner e click su "Mostra di più" che espande la tabella principale.
+    Usa Playwright per scraping completo: gestisce cookie banner (Usercentrics shadow DOM)
+    e click su "Mostra di più" per espandere le tabelle Paesi e Settori.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -384,125 +399,81 @@ def _fetch_justetf_playwright(isin):
             page = browser.new_page()
             url = f"https://www.justetf.com/it/etf-profile.html?isin={isin}"
             page.goto(url, wait_until='networkidle')
-            
-            # Chiudi cookie banner se presente (blocca i click) - prova più selettori
-            try:
-                # Prova diversi selettori per il cookie banner
-                cookie_selectors = [
-                    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
-                    '[data-testid="uc-accept-all-button"]',
-                    '.cookie-consent-accept-all',
-                    '#cookie-accept-all',
-                    'button[data-testid*="accept"]',
-                    'button:contains("Accetta")'
-                ]
-                for selector in cookie_selectors:
-                    try:
-                        cookie_btn = page.locator(selector)
-                        if cookie_btn.is_visible(timeout=2000):
-                            cookie_btn.click()
-                            page.wait_for_timeout(500)
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass  # Cookie già accettati o banner non presente
 
-            # --- PAESI ---
+            # --- Chiudi cookie banner Usercentrics (shadow DOM) ---
             try:
-                # Prova diversi selettori per il link "Mostra di più" paesi
-                countries_selectors = [
-                    '[data-testid="etf-holdings_countries_load-more_link"]',
-                    'a.etf-holdings_countries_load-more_link',
-                    'a:contains("Mostra di più")',
-                    'a:contains("Carica di più")',
-                    '.load-more-link'
-                ]
-                for selector in countries_selectors:
-                    try:
-                        countries_link = page.locator(selector)
-                        if countries_link.is_visible(timeout=2000):
-                            countries_link.click()
-                            page.wait_for_timeout(1500)
-                            break
-                    except Exception:
-                        continue
+                page.evaluate('''() => {
+                    const aside = document.querySelector('#usercentrics-cmp-ui');
+                    if (aside && aside.shadowRoot) {
+                        const btn = aside.shadowRoot.querySelector('button.uc-accept-button');
+                        if (btn) btn.click();
+                    }
+                }''')
+                page.wait_for_timeout(800)
             except Exception:
                 pass
 
-            # Estrai dati dalla tabella principale (ora espansa) - prova più selettori
-            countries_table_selectors = [
-                'h3:text-is("Paesi") ~ table tr',
-                'h3:contains("Paesi") ~ table tr',
-                '.countries-table tr',
-                'table tr:has(td:contains("%"))'
-            ]
-            
-            for table_selector in countries_table_selectors:
+            # Fallback: prova anche il vecchio Cookiebot
+            try:
+                cb = page.locator('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll')
+                if cb.is_visible(timeout=1000):
+                    cb.click()
+                    page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+            # --- PAESI: click "Mostra di più" ed estrai ---
+            try:
+                btn_geo = page.locator('[data-testid="etf-holdings_countries_load-more_link"]')
+                btn_geo.scroll_into_view_if_needed(timeout=3000)
+                btn_geo.click(timeout=5000)
+                page.wait_for_timeout(2000)
+            except Exception:
+                # Se il click normale fallisce, forza il click via JS
                 try:
-                    rows = page.locator(table_selector).all()
-                    if rows:
-                        for row in rows:
-                            cols = row.locator('td').all()
-                            if len(cols) >= 2:
-                                try:
-                                    key = cols[0].inner_text().strip()
-                                    val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
-                                    val = float(val_str)
-                                    if 0 < val < 101:
-                                        geo_dict[key] = val
-                                except Exception:
-                                    pass
-                        if geo_dict:  # Se abbiamo trovato dati, interrompi
-                            break
+                    page.evaluate('''() => {
+                        const el = document.querySelector('[data-testid="etf-holdings_countries_load-more_link"]');
+                        if (el) el.click();
+                    }''')
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+
+            rows_geo = page.locator('[data-testid="etf-holdings_countries_row"]').all()
+            for row in rows_geo:
+                try:
+                    name = row.locator('[data-testid="tl_etf-holdings_countries_value_name"]').inner_text(timeout=500).strip()
+                    pct_str = row.locator('[data-testid="tl_etf-holdings_countries_value_percentage"]').inner_text(timeout=500).strip()
+                    val = float(pct_str.replace('%', '').replace(',', '.'))
+                    if 0 < val <= 100 and name.lower() != 'altri':
+                        geo_dict[name] = val
                 except Exception:
                     continue
 
-            # --- SETTORI ---
+            # --- SETTORI: click "Mostra di più" ed estrai ---
             try:
-                # Prova diversi selettori per il link "Mostra di più" settori
-                sectors_selectors = [
-                    '[data-testid="etf-holdings_sectors_load-more_link"]',
-                    'a.etf-holdings_sectors_load-more_link',
-                    'a:contains("Mostra di più")',
-                    'a:contains("Carica di più")'
-                ]
-                for selector in sectors_selectors:
-                    try:
-                        sectors_link = page.locator(selector)
-                        if sectors_link.is_visible(timeout=2000):
-                            sectors_link.click()
-                            page.wait_for_timeout(1500)
-                            break
-                    except Exception:
-                        continue
+                btn_sec = page.locator('[data-testid="etf-holdings_sectors_load-more_link"]')
+                btn_sec.scroll_into_view_if_needed(timeout=3000)
+                btn_sec.click(timeout=5000)
+                page.wait_for_timeout(2000)
             except Exception:
-                pass
-
-            # Estrai dati dalla tabella settori - prova più selettori
-            sectors_table_selectors = [
-                'h3:text-is("Settori") ~ table tr',
-                'h3:contains("Settori") ~ table tr',
-                '.sectors-table tr'
-            ]
-            
-            for table_selector in sectors_table_selectors:
                 try:
-                    rows = page.locator(table_selector).all()
-                    if rows:
-                        for row in rows:
-                            cols = row.locator('td').all()
-                            if len(cols) >= 2:
-                                try:
-                                    key = cols[0].inner_text().strip()
-                                    val_str = cols[1].inner_text().strip().replace('%', '').replace(',', '.')
-                                    val = float(val_str)
-                                    if 0 < val < 101:
-                                        sec_dict[key] = val
-                                except Exception:
-                                    pass
-                        if sec_dict:  # Se abbiamo trovato dati, interrompi
-                            break
+                    page.evaluate('''() => {
+                        const el = document.querySelector('[data-testid="etf-holdings_sectors_load-more_link"]');
+                        if (el) el.click();
+                    }''')
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+
+            rows_sec = page.locator('[data-testid="etf-holdings_sectors_row"]').all()
+            for row in rows_sec:
+                try:
+                    name = row.locator('[data-testid="tl_etf-holdings_sectors_value_name"]').inner_text(timeout=500).strip()
+                    pct_str = row.locator('[data-testid="tl_etf-holdings_sectors_value_percentage"]').inner_text(timeout=500).strip()
+                    val = float(pct_str.replace('%', '').replace(',', '.'))
+                    if 0 < val <= 100 and name.lower() != 'altri':
+                        sec_dict[name] = val
                 except Exception:
                     continue
 
@@ -517,22 +488,25 @@ def _fetch_justetf_playwright(isin):
 
 def sync_prices(df_trans, df_map):
     """
-    Scarica i prezzi da Yahoo Finance solo per gli asset posseduti.
+    Scarica i prezzi da Yahoo Finance per TUTTI gli asset mappati (posseduti e venduti).
     Esegue un download INCREMENTALE (scarica solo i giorni mancanti).
+    Per gli asset venduti scarica solo fino alla data dell'ultima transazione.
     """
     if df_trans.empty or df_map.empty:
         return 0
 
-    # 1. Identifica gli asset attualmente posseduti
+    # 1. Identifica tutti gli ISIN con transazioni
+    all_isins = df_trans['isin'].unique().tolist()
     holdings = df_trans.groupby('isin')['quantity'].sum()
-    owned_isins = holdings[holdings > 0].index.tolist()
-    
-    df_map_owned = df_map[df_map['isin'].isin(owned_isins)]
-    if df_map_owned.empty:
-        st.info("Nessun asset attualmente posseduto trovato tra quelli mappati.")
+    owned_isins = set(holdings[holdings > 0].index.tolist())
+
+    # 2. Filtra solo gli ISIN mappati
+    df_map_to_sync = df_map[df_map['isin'].isin(all_isins)]
+    if df_map_to_sync.empty:
+        st.info("Nessun asset mappato trovato tra quelli nelle transazioni.")
         return 0
 
-    owned_mapping_ids = df_map_owned['id'].tolist()
+    mapping_ids = df_map_to_sync['id'].tolist()
     
     # Carica i prezzi esistenti
     df_prices_all = get_data("prices")
@@ -541,16 +515,25 @@ def sync_prices(df_trans, df_map):
 
     new_data = []
     errors = []
-    bar = st.progress(0, text="Analisi asset posseduti...")
+    bar = st.progress(0, text="Analisi asset...")
     
     today = datetime.now().date()
 
-    for i, m_id in enumerate(owned_mapping_ids):
-        ticker_row = df_map_owned[df_map_owned['id'] == m_id]
+    for i, m_id in enumerate(mapping_ids):
+        ticker_row = df_map_to_sync[df_map_to_sync['id'] == m_id]
         if ticker_row.empty:
             continue
         
         t = ticker_row['ticker'].iloc[0]
+        isin = ticker_row['isin'].iloc[0]
+        is_owned = isin in owned_isins
+
+        # Per asset venduti, scarica solo fino alla data dell'ultima transazione
+        if is_owned:
+            end_date = today + timedelta(days=1)
+        else:
+            last_tx_date = df_trans[df_trans['isin'] == isin]['date'].max()
+            end_date = pd.to_datetime(last_tx_date).date() + timedelta(days=1)
         
         # --- LOGICA INCREMENTALE ---
         start_date = datetime(2020, 1, 1).date() # Default se non ho dati
@@ -560,24 +543,25 @@ def sync_prices(df_trans, df_map):
             if not existing_prices.empty:
                 last_date_in_db = existing_prices['date'].max().date()
                 
-                # Se abbiamo dati recenti, scarichiamo da (ultimo_dato + 1 giorno)
-                if last_date_in_db >= today - timedelta(days=1):
-                    # Già aggiornato a ieri o oggi, salto
-                    bar.progress((i + 1) / len(owned_mapping_ids))
+                # Se abbiamo dati fino alla data target, saltiamo
+                target_check = today - timedelta(days=1) if is_owned else end_date - timedelta(days=2)
+                if last_date_in_db >= target_check:
+                    bar.progress((i + 1) / len(mapping_ids))
                     continue
                 else:
                     start_date = last_date_in_db + timedelta(days=1)
         
-        # Se start_date è oggi o futuro, non scaricare nulla
-        if start_date > today:
-             bar.progress((i + 1) / len(owned_mapping_ids))
+        # Se start_date è oltre end_date, non scaricare nulla
+        if start_date >= end_date:
+             bar.progress((i + 1) / len(mapping_ids))
              continue
 
         try:
-            bar.progress((i + 1) / len(owned_mapping_ids), text=f"Scaricamento {t} dal {start_date}...")
+            label = f"{t} {'(venduto)' if not is_owned else ''}"
+            bar.progress((i + 1) / len(mapping_ids), text=f"Scaricamento {label} dal {start_date}...")
             
-            # Scarica solo il delta mancante
-            hist = yf.download(t, start=start_date, end=today + timedelta(days=1), progress=False)
+            # Scarica solo il delta mancante (auto_adjust=False per prezzi Close reali)
+            hist = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=False)
             
             if not hist.empty:
                 # Gestione colonne MultiIndex (fix per versioni recenti di yfinance)
