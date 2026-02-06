@@ -6,7 +6,8 @@ import uuid
 from datetime import date, datetime
 from database.connection import (
     get_data, save_data, save_allocation_json, replace_all_mappings,
-    insert_single_transaction, update_transaction, delete_transactions
+    insert_single_transaction, update_transaction, delete_transactions,
+    get_db_connection
 )
 from services.data_service import (
     process_new_transactions, 
@@ -458,7 +459,7 @@ def render_budget_tab(initial_balance_exists: bool):
     if not df_budget_all.empty:
         df_budget_all['date'] = pd.to_datetime(df_budget_all['date']).dt.date
         df_edit = df_budget_all.sort_values('date', ascending=False).copy()
-        df_edit.insert(0, "Elimina", False)
+        df_edit.insert(0, "🗑️", False)
         
         edited_budget = st.data_editor(
             df_edit, 
@@ -466,24 +467,39 @@ def render_budget_tab(initial_balance_exists: bool):
             hide_index=True, 
             num_rows="dynamic", 
             key="budget_editor",
+            disabled=["id"],
             column_config={
-                "Elimina": st.column_config.CheckboxColumn("🗑️", required=True),
+                "🗑️": st.column_config.CheckboxColumn("Elimina", required=True),
+                "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
                 "date": st.column_config.DateColumn("📅 Data", format="DD/MM/YYYY", required=True),
                 "type": st.column_config.SelectboxColumn("📌 Tipo", options=["Entrata", "Uscita"], required=True),
                 "category": st.column_config.SelectboxColumn("🏷️ Categoria", options=ALL_CATEGORIES, required=True),
                 "amount": st.column_config.NumberColumn("💰 Importo", format="€ %.2f", required=True),
-                "note": st.column_config.TextColumn("📝 Note"),
-                "id": None
+                "note": st.column_config.TextColumn("📝 Note")
             }
         )
         if st.button("💾 Salva Modifiche Storico", type="primary", key="save_budget_history"):
-            df_to_save = pd.DataFrame(edited_budget)
-            df_to_save = df_to_save[df_to_save["Elimina"] == False].drop(columns=["Elimina"])
-            if "id" in df_to_save.columns:
-                df_to_save = df_to_save.drop(columns=["id"])
-            save_data(df_to_save, "budget", method='replace')
-            st.success("✅ Movimenti aggiornati!")
-            st.rerun()
+            df_edited = pd.DataFrame(edited_budget)
+            
+            # Filtra righe da mantenere (quelle con Elimina = False)
+            df_to_keep = df_edited[df_edited["🗑️"] == False].drop(columns=["🗑️"]).copy()
+            
+            if df_to_keep.empty:
+                # Caso speciale: tutte le righe eliminate → svuota la tabella
+                from sqlalchemy import text as sa_text
+                conn = get_db_connection()
+                with conn.engine.begin() as c:
+                    c.execute(sa_text("DELETE FROM budget"))
+                st.cache_data.clear()
+                st.success("✅ Tutti i movimenti eliminati!")
+                st.rerun()
+            else:
+                # Salva con replace
+                if "id" in df_to_keep.columns:
+                    df_to_keep = df_to_keep.drop(columns=["id"])
+                save_data(df_to_keep, "budget", method='replace')
+                st.success("✅ Movimenti aggiornati!")
+                st.rerun()
     else:
         st.info("Nessun movimento presente. Inizia ad aggiungere le tue entrate e uscite!")
 
