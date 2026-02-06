@@ -2,7 +2,7 @@ import streamlit as st
 from ui.components import make_sidebar
 from database.connection import get_data
 from ui.data_management_components import (
-    render_import_tab,
+    render_transactions_tab,
     render_mapping_tab,
     render_prices_tab,
     render_budget_tab,
@@ -26,7 +26,7 @@ initial_balance_exists = not df_budget_check.empty and not df_budget_check[df_bu
 
 # Definizione dei Tab
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📥 Importa CSV", 
+    "� Transazioni", 
     "🔗 Mappatura Ticker", 
     "🔄 Aggiorna Prezzi", 
     "💸 Movimenti Bilancio", 
@@ -35,7 +35,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 with tab1:
-    render_import_tab()
+    render_transactions_tab()
 
 with tab2:
     render_mapping_tab()

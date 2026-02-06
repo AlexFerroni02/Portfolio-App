@@ -204,10 +204,36 @@ def _render_detail_pie_chart(full_view: pd.DataFrame, category: str, color_scale
 
 def _render_xray_allocation_tab(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
     """Renderizza il tab con l'analisi X-Ray (geografica e settoriale)."""
-    st.caption("Questa analisi mostra l'esposizione geografica e settoriale aggregata, pesata per il valore di ogni asset.")
+
+    # --- Toggle: Portafoglio Completo vs Solo Azionario ---
+    xray_mode = st.radio(
+        "Seleziona la vista X-Ray",
+        ["📊 Portafoglio Completo", "📈 Solo Azionario"],
+        horizontal=True,
+        key="xray_mode_toggle",
+        label_visibility="collapsed",
+    )
+    is_equity_only = xray_mode == "📈 Solo Azionario"
+
+    if is_equity_only:
+        st.caption(
+            "Esposizione geografica e settoriale della **sola componente azionaria**, "
+            "pesata per il valore di mercato di ogni ETF/azione."
+        )
+    else:
+        st.caption(
+            "Esposizione geografica e settoriale **dell'intero portafoglio**, "
+            "pesata per il valore di mercato di ogni asset."
+        )
+
+    # --- Prepara la vista con dati di allocazione ---
     view_alloc = full_view.merge(df_alloc, on='mapping_id', how='left') if not df_alloc.empty else full_view.copy()
+
+    if is_equity_only:
+        view_alloc = view_alloc[view_alloc['category'] == 'Azionario'].copy()
+
     total_val = view_alloc['mkt_val'].sum()
-    
+
     if total_val <= 0:
         st.warning("Il valore del portafoglio è zero o i prezzi non sono aggiornati.")
         return
@@ -231,13 +257,22 @@ def _render_xray_allocation_tab(full_view: pd.DataFrame, df_alloc: pd.DataFrame)
         for sector, perc in s_map.items():
             total_sec[sector] = total_sec.get(sector, 0) + (val_etf * (float(perc) / 100))
 
+    # Prefisso chiavi diverso per modalità, evita conflitti Streamlit
+    mode_prefix = "eq" if is_equity_only else "all"
+
     c_geo, c_sec = st.columns(2)
     
     with c_geo:
-        render_allocation_card(ALLOCATION_CONFIG_DASH["geo"] | {"data": total_geo})
+        render_allocation_card(
+            ALLOCATION_CONFIG_DASH["geo"]
+            | {"data": total_geo, "key_prefix": f"dash_geo_{mode_prefix}"}
+        )
     
     with c_sec:
-        render_allocation_card(ALLOCATION_CONFIG_DASH["sec"] | {"data": total_sec})
+        render_allocation_card(
+            ALLOCATION_CONFIG_DASH["sec"]
+            | {"data": total_sec, "key_prefix": f"dash_sec_{mode_prefix}"}
+        )
 
 
 def render_composition_tabs(full_view: pd.DataFrame, df_alloc: pd.DataFrame):
