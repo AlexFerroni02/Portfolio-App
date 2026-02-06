@@ -170,7 +170,7 @@ def render_budget_tab(initial_balance_exists: bool):
                 "id": None
             }
         )
-        if st.button("💾 Salva Modifiche Storico", type="primary"):
+        if st.button("💾 Salva Modifiche Storico", type="primary", key="save_budget_history"):
             df_to_save = pd.DataFrame(edited_budget)
             df_to_save = df_to_save[df_to_save["Elimina"] == False].drop(columns=["Elimina"])
             if "id" in df_to_save.columns:
@@ -446,7 +446,7 @@ def render_net_worth_tab():
         }
     )
 
-    if st.button("💾 Salva Modifiche Storico", type="primary"):
+    if st.button("💾 Salva Modifiche Storico", type="primary", key="save_nw_history"):
         df_new_nw = pd.DataFrame(edited_nw)
         df_new_nw = df_new_nw[df_new_nw["Elimina"] == False].drop(columns=["Elimina"])
         if "id" in df_new_nw.columns: df_new_nw = df_new_nw.drop(columns=["id"])
