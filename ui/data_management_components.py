@@ -86,54 +86,100 @@ def render_prices_tab():
 def render_budget_tab(initial_balance_exists: bool):
     st.header("➕ Inserimento Rapido Movimenti")
     CATEGORIE_ENTRATE_BASE = ["Stipendio", "Bonus", "Regali", "Dividendi", "Rimborso", "Altro", "Aggiustamento Liquidità"]
-    CATEGORIE_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro", "Aggiustamento Liquidità"]
+    CATEGORIE_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro", "Aggiustamento Liquidità", "Investimento"]
+    ALL_CATEGORIES = sorted(list(set(CATEGORIE_ENTRATE_BASE + CATEGORIE_USCITE + ["Saldo Iniziale"])))
+    
     if not initial_balance_exists:
         CATEGORIE_ENTRATE = ["Saldo Iniziale"] + CATEGORIE_ENTRATE_BASE
-        st.warning("**Imposta il tuo Saldo Iniziale!**\n\nQuesto è il primo passo fondamentale.", icon="🎯")
+        st.warning("**Imposta il tuo Saldo Iniziale!** Questo è il primo passo fondamentale.", icon="🎯")
     else:
         CATEGORIE_ENTRATE = CATEGORIE_ENTRATE_BASE
         st.success("✅ Hai già inserito un 'Saldo Iniziale'.", icon="👍")
-    st.info("💡 Usa 'Aggiustamento Liquidità' per correggere eventuali discrepanze future.")
+    
+    st.info("💡 Inserisci solo gli importi > 0, gli altri verranno ignorati automaticamente.")
+    
     col_date, col_type = st.columns(2)
-    selected_date = col_date.date_input("Data per i movimenti", date.today(), key="batch_date")
-    f_type = col_type.radio("Tipo Movimento:", ["Uscita", "Entrata"], horizontal=True, key="budget_type_radio")
+    selected_date = col_date.date_input("📅 Data", date.today(), key="batch_date")
+    f_type = col_type.radio("📌 Tipo:", ["Uscita", "Entrata"], horizontal=True, key="budget_type_radio")
+    
+    active_categories = CATEGORIE_USCITE if f_type == "Uscita" else CATEGORIE_ENTRATE
+    
     with st.form("batch_form", clear_on_submit=True):
-        active_categories = CATEGORIE_USCITE if f_type == "Uscita" else CATEGORIE_ENTRATE
-        st.subheader(f"🔴 Inserisci Uscite" if f_type == "Uscita" else "🟢 Inserisci Entrate")
-        for cat in active_categories:
-            st.markdown(f"**{cat}**")
-            col_val, col_note = st.columns(2)
-            col_val.number_input("Importo", label_visibility="collapsed", key=f"movimento_{cat}", min_value=0.0, value=0.0, format="%.2f")
-            col_note.text_input("Note", label_visibility="collapsed", key=f"nota_{cat}", placeholder="Nota opzionale...")
-            st.divider()
-        if st.form_submit_button("💾 Salva Movimenti", type="primary", width='stretch'):
-            rows_to_add = [{'date': pd.to_datetime(selected_date), 'type': f_type, 'category': cat, 'amount': st.session_state[f"movimento_{cat}"], 'note': st.session_state[f"nota_{cat}"] or ''} for cat in active_categories if st.session_state[f"movimento_{cat}"] > 0]
+        st.subheader("🔴 Inserisci Uscite" if f_type == "Uscita" else "🟢 Inserisci Entrate")
+        
+        # Layout compatto: 3 categorie per riga
+        for i in range(0, len(active_categories), 3):
+            cols = st.columns(3)
+            for j, col in enumerate(cols):
+                if i + j < len(active_categories):
+                    cat = active_categories[i + j]
+                    with col:
+                        st.number_input(
+                            f"💰 {cat}", 
+                            key=f"movimento_{cat}", 
+                            min_value=0.0, 
+                            value=0.0, 
+                            format="%.2f",
+                            help=f"Inserisci importo per {cat}"
+                        )
+        
+        st.divider()
+        submitted = st.form_submit_button("💾 Salva Movimenti", type="primary", use_container_width=True)
+        
+        if submitted:
+            rows_to_add = []
+            for cat in active_categories:
+                amount = st.session_state.get(f"movimento_{cat}", 0.0)
+                if amount > 0:
+                    rows_to_add.append({
+                        'date': pd.to_datetime(selected_date), 
+                        'type': f_type, 
+                        'category': cat, 
+                        'amount': amount, 
+                        'note': ''
+                    })
             if rows_to_add:
                 save_data(pd.DataFrame(rows_to_add), "budget", method='append')
                 st.success(f"✅ Salvati {len(rows_to_add)} nuovi movimenti!")
+            else:
+                st.warning("⚠️ Nessun importo inserito. Inserisci almeno un valore > 0.")
+    
     st.divider()
-    st.subheader("Storico Movimenti (Modifica o Elimina)")
+    
+    # --- STORICO MOVIMENTI ---
+    st.subheader("📊 Storico Movimenti (Modifica o Elimina)")
     df_budget_all = get_data("budget")
     if not df_budget_all.empty:
         df_budget_all['date'] = pd.to_datetime(df_budget_all['date']).dt.date
         df_edit = df_budget_all.sort_values('date', ascending=False).copy()
         df_edit.insert(0, "Elimina", False)
-        all_categories = sorted(list(set(CATEGORIE_ENTRATE_BASE + CATEGORIE_USCITE + ["Saldo Iniziale"])))
-        edited_budget = st.data_editor(df_edit, width='stretch', hide_index=True, num_rows="dynamic", key="budget_editor",
+        
+        edited_budget = st.data_editor(
+            df_edit, 
+            width='stretch', 
+            hide_index=True, 
+            num_rows="dynamic", 
+            key="budget_editor",
             column_config={
-                "Elimina": st.column_config.CheckboxColumn(required=True),
-                "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY", required=True),
-                "type": st.column_config.SelectboxColumn("Tipo", options=["Entrata", "Uscita"], required=True),
-                "category": st.column_config.SelectboxColumn("Categoria", options=all_categories, required=True),
-                "amount": st.column_config.NumberColumn("Importo", format="€ %.2f", required=True),
-                "note": st.column_config.TextColumn("Note")
-            })
-        if st.button("💾 Salva Modifiche Movimenti", type="primary"):
+                "Elimina": st.column_config.CheckboxColumn("🗑️", required=True),
+                "date": st.column_config.DateColumn("📅 Data", format="DD/MM/YYYY", required=True),
+                "type": st.column_config.SelectboxColumn("📌 Tipo", options=["Entrata", "Uscita"], required=True),
+                "category": st.column_config.SelectboxColumn("🏷️ Categoria", options=ALL_CATEGORIES, required=True),
+                "amount": st.column_config.NumberColumn("💰 Importo", format="€ %.2f", required=True),
+                "note": st.column_config.TextColumn("📝 Note"),
+                "id": None
+            }
+        )
+        if st.button("💾 Salva Modifiche Storico", type="primary", key="save_budget_history"):
             df_to_save = pd.DataFrame(edited_budget)
             df_to_save = df_to_save[df_to_save["Elimina"] == False].drop(columns=["Elimina"])
+            if "id" in df_to_save.columns:
+                df_to_save = df_to_save.drop(columns=["id"])
             save_data(df_to_save, "budget", method='replace')
             st.success("✅ Movimenti aggiornati!")
             st.rerun()
+    else:
+        st.info("Nessun movimento presente. Inizia ad aggiungere le tue entrate e uscite!")
 
 def render_allocation_tab():
     st.subheader("Scarica e Modifica Dati di Allocazione (X-Ray)")
@@ -400,7 +446,7 @@ def render_net_worth_tab():
         }
     )
 
-    if st.button("💾 Salva Modifiche Storico", type="primary"):
+    if st.button("💾 Salva Modifiche Storico", type="primary", key="save_nw_history"):
         df_new_nw = pd.DataFrame(edited_nw)
         df_new_nw = df_new_nw[df_new_nw["Elimina"] == False].drop(columns=["Elimina"])
         if "id" in df_new_nw.columns: df_new_nw = df_new_nw.drop(columns=["id"])

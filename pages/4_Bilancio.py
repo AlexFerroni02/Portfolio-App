@@ -9,7 +9,12 @@ from ui.budget_components import (
     render_monthly_kpis,
     render_monthly_charts,
     render_net_worth_section,
-    render_transactions_editor
+    render_transactions_editor,
+    render_expense_trend_chart,
+    render_savings_rate_trend,
+    render_budget_rule_check,
+    render_expense_breakdown,
+    render_investment_trend
 )
 
 st.set_page_config(page_title="Bilancio", layout="wide", page_icon="💰")
@@ -32,7 +37,7 @@ if df_budget.empty:
     st.stop()
 
 # --- 2. SEZIONE ANALISI MENSILE ---
-st.subheader("Analisi Mensile")
+st.subheader("📅 Analisi Mensile")
 selected_month = render_month_selector(df_budget)
 df_month = df_budget[df_budget['date'].dt.strftime('%Y-%m') == selected_month]
 
@@ -46,10 +51,30 @@ render_monthly_charts(df_month, summary)
 
 st.divider()
 
-# --- 3. SEZIONE PATRIMONIO NETTO ---
+# --- 3. VERIFICA REGOLA 50/30/20 ---
+render_budget_rule_check(df_budget, selected_month)
+
+st.divider()
+
+# --- 4. TREND E ANALISI STORICHE ---
+st.subheader("📈 Analisi Trend")
+col_trend1, col_trend2 = st.columns(2)
+
+with col_trend1:
+    render_expense_trend_chart(df_budget, months=6)
+
+with col_trend2:
+    render_savings_rate_trend(df_budget, months=6)
+
+render_expense_breakdown(df_budget, months=3)
+render_investment_trend(df_budget, months=6)
+
+st.divider()
+
+# --- 5. SEZIONE PATRIMONIO NETTO ---
 render_net_worth_section(df_nw)
 
 st.divider()
 
-# --- 4. SEZIONE DETTAGLIO MOVIMENTI ---
+# --- 6. SEZIONE DETTAGLIO MOVIMENTI ---
 render_transactions_editor(df_month, df_budget)
