@@ -105,3 +105,246 @@ def render_transactions_editor(df_month: pd.DataFrame, df_budget_full: pd.DataFr
                 save_data(df_budget_updated, "budget", method='replace') 
                 st.success("✅ Eliminato! La pagina si aggiornerà.") 
                 st.rerun()
+
+
+# =============================================
+# NUOVI GRAFICI PER ANALISI BUDGET
+# =============================================
+
+def render_expense_trend_chart(df_budget: pd.DataFrame, months: int = 6):
+    """Mostra il trend delle spese negli ultimi N mesi."""
+    st.subheader(f"📊 Trend Spese (Ultimi {months} Mesi)")
+    
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    df = df_budget.copy()
+    df['mese'] = df['date'].dt.to_period('M').astype(str)
+    
+    # Filtra ultimi N mesi
+    mesi_unici = sorted(df['mese'].unique(), reverse=True)[:months]
+    df_filtered = df[df['mese'].isin(mesi_unici)]
+    
+    # Aggrega per mese e tipo
+    df_agg = df_filtered.groupby(['mese', 'type'])['amount'].sum().reset_index()
+    df_pivot = df_agg.pivot(index='mese', columns='type', values='amount').fillna(0).reset_index()
+    df_pivot = df_pivot.sort_values('mese')
+    
+    # Crea grafico
+    fig = go.Figure()
+    
+    if 'Uscita' in df_pivot.columns:
+        fig.add_trace(go.Scatter(
+            x=df_pivot['mese'], y=df_pivot['Uscita'],
+            name='Spese', mode='lines+markers',
+            line=dict(color='#dc3545', width=3),
+            fill='tozeroy', fillcolor='rgba(220, 53, 69, 0.2)'
+        ))
+    
+    if 'Entrata' in df_pivot.columns:
+        fig.add_trace(go.Scatter(
+            x=df_pivot['mese'], y=df_pivot['Entrata'],
+            name='Entrate', mode='lines+markers',
+            line=dict(color='#28a745', width=3)
+        ))
+    
+    fig.update_layout(
+        title=None,
+        xaxis_title="Mese",
+        yaxis_title="Importo (€)",
+        hovermode='x unified',
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+def render_savings_rate_trend(df_budget: pd.DataFrame, months: int = 6):
+    """Mostra l'andamento del tasso di risparmio."""
+    st.subheader(f"📈 Andamento Tasso di Risparmio")
+    
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    df = df_budget.copy()
+    df['mese'] = df['date'].dt.to_period('M').astype(str)
+    
+    # Calcola entrate e uscite per mese
+    mesi_unici = sorted(df['mese'].unique(), reverse=True)[:months]
+    df_filtered = df[df['mese'].isin(mesi_unici)]
+    
+    df_agg = df_filtered.groupby(['mese', 'type'])['amount'].sum().reset_index()
+    df_pivot = df_agg.pivot(index='mese', columns='type', values='amount').fillna(0).reset_index()
+    
+    # Calcola savings rate
+    if 'Entrata' in df_pivot.columns and 'Uscita' in df_pivot.columns:
+        df_pivot['risparmio'] = df_pivot['Entrata'] - df_pivot['Uscita']
+        df_pivot['savings_rate'] = (df_pivot['risparmio'] / df_pivot['Entrata'] * 100).clip(lower=-100, upper=100)
+    else:
+        st.info("Dati insufficienti per calcolare il tasso di risparmio.")
+        return
+    
+    df_pivot = df_pivot.sort_values('mese')
+    
+    # Colori basati sul valore
+    colors = ['#28a745' if x >= 20 else '#ffc107' if x >= 0 else '#dc3545' for x in df_pivot['savings_rate']]
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=df_pivot['mese'], 
+            y=df_pivot['savings_rate'],
+            marker_color=colors,
+            text=[f"{x:.1f}%" for x in df_pivot['savings_rate']],
+            textposition='outside'
+        )
+    ])
+    
+    # Linea obiettivo 20%
+    fig.add_hline(y=20, line_dash="dash", line_color="green", 
+                  annotation_text="Obiettivo 20%", annotation_position="right")
+    
+    fig.update_layout(
+        xaxis_title="Mese",
+        yaxis_title="Tasso Risparmio (%)",
+        margin=dict(l=10, r=10, t=10, b=10),
+        yaxis=dict(range=[-50, 100])
+    )
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+def render_budget_rule_check(df_budget: pd.DataFrame, selected_month: str):
+    """Verifica la regola 50/30/20: 50% necessità, 30% desideri, 20% risparmio."""
+    st.subheader("🎯 Verifica Regola 50/30/20")
+    
+    # Categorie classificate
+    NECESSITA = ["Affitto/Casa", "Spesa Alimentare", "Trasporti", "Bollette", "Salute"]
+    DESIDERI = ["Ristoranti/Svago", "Shopping", "Viaggi"]
+    
+    df_month = df_budget[df_budget['date'].dt.strftime('%Y-%m') == selected_month].copy()
+    
+    if df_month.empty:
+        st.info("Nessun dato per questo mese.")
+        return
+    
+    entrate = df_month[df_month['type'] == 'Entrata']['amount'].sum()
+    if entrate == 0:
+        st.warning("Nessuna entrata registrata per questo mese.")
+        return
+    
+    # Calcola spese per categoria
+    df_spese = df_month[df_month['type'] == 'Uscita']
+    spese_necessita = df_spese[df_spese['category'].isin(NECESSITA)]['amount'].sum()
+    spese_desideri = df_spese[df_spese['category'].isin(DESIDERI)]['amount'].sum()
+    risparmio = entrate - df_spese['amount'].sum()
+    
+    # Percentuali
+    pct_necessita = (spese_necessita / entrate) * 100
+    pct_desideri = (spese_desideri / entrate) * 100
+    pct_risparmio = (risparmio / entrate) * 100
+    
+    # Layout a colonne
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        delta_n = pct_necessita - 50
+        st.metric(
+            "🏠 Necessità", 
+            f"{pct_necessita:.1f}%",
+            delta=f"{delta_n:+.1f}% vs 50%",
+            delta_color="inverse"
+        )
+        st.caption(f"€ {spese_necessita:,.2f}")
+    
+    with c2:
+        delta_d = pct_desideri - 30
+        st.metric(
+            "🎉 Desideri", 
+            f"{pct_desideri:.1f}%",
+            delta=f"{delta_d:+.1f}% vs 30%",
+            delta_color="inverse"
+        )
+        st.caption(f"€ {spese_desideri:,.2f}")
+    
+    with c3:
+        delta_r = pct_risparmio - 20
+        st.metric(
+            "💰 Risparmio", 
+            f"{pct_risparmio:.1f}%",
+            delta=f"{delta_r:+.1f}% vs 20%",
+            delta_color="normal"
+        )
+        st.caption(f"€ {risparmio:,.2f}")
+    
+    # Grafico a ciambella comparativo
+    fig = go.Figure()
+    
+    # Valori attuali
+    fig.add_trace(go.Pie(
+        values=[pct_necessita, pct_desideri, max(0, pct_risparmio)],
+        labels=['Necessità', 'Desideri', 'Risparmio'],
+        hole=0.6,
+        marker_colors=['#17a2b8', '#ffc107', '#28a745'],
+        textinfo='label+percent',
+        name='Attuale'
+    ))
+    
+    fig.update_layout(
+        annotations=[dict(text='Attuale', x=0.5, y=0.5, font_size=16, showarrow=False)],
+        margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=False
+    )
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    
+    # Suggerimenti
+    if pct_necessita > 55:
+        st.warning("⚠️ Le spese per necessità superano il 55%. Valuta se puoi ridurre affitto o bollette.")
+    if pct_desideri > 35:
+        st.warning("⚠️ Le spese per desideri superano il 35%. Considera di ridurre svago e shopping.")
+    if pct_risparmio >= 20:
+        st.success("✅ Ottimo! Stai risparmiando almeno il 20% delle entrate.")
+    elif pct_risparmio > 0:
+        st.info(f"💡 Risparmio positivo ma sotto l'obiettivo. Mancano {20 - pct_risparmio:.1f}% per raggiungere il 20%.")
+
+
+def render_expense_breakdown(df_budget: pd.DataFrame, months: int = 3):
+    """Mostra le top 5 categorie di spesa."""
+    st.subheader("🔥 Top Categorie di Spesa")
+    
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    df = df_budget.copy()
+    df['mese'] = df['date'].dt.to_period('M').astype(str)
+    
+    # Ultimi N mesi
+    mesi_unici = sorted(df['mese'].unique(), reverse=True)[:months]
+    df_filtered = df[(df['mese'].isin(mesi_unici)) & (df['type'] == 'Uscita')]
+    
+    if df_filtered.empty:
+        st.info("Nessuna spesa negli ultimi mesi.")
+        return
+    
+    # Top 5 categorie
+    df_cat = df_filtered.groupby('category')['amount'].sum().sort_values(ascending=False).head(5)
+    
+    fig = px.bar(
+        x=df_cat.values,
+        y=df_cat.index,
+        orientation='h',
+        color=df_cat.values,
+        color_continuous_scale='Reds',
+        text=[f"€ {v:,.0f}" for v in df_cat.values]
+    )
+    
+    fig.update_layout(
+        showlegend=False,
+        coloraxis_showscale=False,
+        xaxis_title="Totale Speso (€)",
+        yaxis_title=None,
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+    fig.update_traces(textposition='outside')
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
