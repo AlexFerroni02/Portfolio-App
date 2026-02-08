@@ -405,3 +405,321 @@ def render_expense_breakdown(df_budget: pd.DataFrame, months: int = 3):
     fig.update_traces(textposition='outside')
     
     st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+# =============================================
+# COMPONENTI SEZIONE PANORAMICA GENERALE
+# =============================================
+
+def render_general_kpis(summary: dict):
+    """Renderizza i KPI generali con totali e medie."""
+    st.subheader("📊 Riepilogo Generale")
+    
+    # Prima riga: Totali
+    st.write("##### Totali (tutto il periodo)")
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("💰 Totale Entrate", f"€ {summary['totale_entrate']:,.0f}")
+    t2.metric("💸 Totale Uscite", f"€ {summary['totale_uscite']:,.0f}")
+    t3.metric("📈 Totale Investito", f"€ {summary['totale_investito']:,.0f}")
+    t4.metric("🏦 Totale Risparmio", f"€ {summary['totale_risparmio']:,.0f}")
+    
+    # Seconda riga: Medie
+    st.write(f"##### Medie Mensili ({int(summary['num_mesi'])} mesi)")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📥 Media Entrate", f"€ {summary['media_entrate']:,.0f}")
+    m2.metric("📤 Media Uscite", f"€ {summary['media_uscite']:,.0f}")
+    m3.metric("📊 Media Investito", f"€ {summary['media_investito']:,.0f}")
+    m4.metric("💵 Media Risparmio", f"€ {summary['media_risparmio']:,.0f}")
+
+
+def render_income_vs_expense_totals(df_budget: pd.DataFrame):
+    """Grafico a barre con totali entrate/uscite/investimenti/risparmio."""
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    # Calcola totali
+    entrate = df_budget[df_budget['type'] == 'Entrata']['amount'].sum()
+    uscite = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] != 'Investimento')]['amount'].sum()
+    investito = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] == 'Investimento')]['amount'].sum()
+    risparmio = entrate - uscite - investito
+    
+    df_chart = pd.DataFrame({
+        'Categoria': ['Entrate', 'Uscite', 'Investimenti', 'Risparmio'],
+        'Importo': [entrate, uscite, investito, risparmio],
+        'Colore': ['#28a745', '#dc3545', '#007bff', '#ffc107']
+    })
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df_chart['Categoria'],
+        y=df_chart['Importo'],
+        marker_color=df_chart['Colore'],
+        text=[f"€ {v:,.0f}" for v in df_chart['Importo']],
+        textposition='outside'
+    ))
+    
+    fig.update_layout(
+        title="Flussi Totali",
+        xaxis_title=None,
+        yaxis_title="Importo (€)",
+        margin=dict(l=10, r=10, t=40, b=10),
+        showlegend=False
+    )
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+def render_category_averages_chart(df_averages: pd.DataFrame):
+    """Grafico a barre orizzontali delle medie per categoria."""
+    if df_averages.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    fig = px.bar(
+        df_averages.head(10),  # Top 10 categorie
+        x='media_mensile',
+        y='category',
+        orientation='h',
+        color='media_mensile',
+        color_continuous_scale='RdYlGn_r',
+        text=[f"€ {v:,.0f}" for v in df_averages.head(10)['media_mensile']]
+    )
+    
+    fig.update_layout(
+        title="Media Mensile per Categoria",
+        xaxis_title="Importo Medio (€)",
+        yaxis_title=None,
+        yaxis={'categoryorder': 'total ascending'},
+        coloraxis_showscale=False,
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+    fig.update_traces(textposition='outside')
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+
+
+def render_yearly_summary_chart(df_yearly: pd.DataFrame):
+    """Grafico a barre raggruppate per anno."""
+    if df_yearly.empty:
+        st.info("Nessun dato annuale disponibile.")
+        return
+    
+    st.subheader("📅 Riepilogo Annuale")
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(name='Entrate', x=df_yearly['anno'], y=df_yearly['entrate'], marker_color='#28a745'))
+    fig.add_trace(go.Bar(name='Uscite', x=df_yearly['anno'], y=df_yearly['uscite'], marker_color='#dc3545'))
+    fig.add_trace(go.Bar(name='Investito', x=df_yearly['anno'], y=df_yearly['investito'], marker_color='#007bff'))
+    fig.add_trace(go.Bar(name='Risparmio', x=df_yearly['anno'], y=df_yearly['risparmio'], marker_color='#ffc107'))
+    
+    fig.update_layout(
+        barmode='group',
+        xaxis_title="Anno",
+        yaxis_title="Importo (€)",
+        xaxis={'tickmode': 'linear'},
+        margin=dict(l=10, r=10, t=10, b=10)
+    )
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    
+    # Tabella riepilogativa
+    with st.expander("📋 Dettaglio Annuale"):
+        df_display = df_yearly.copy()
+        df_display.columns = ['Anno', 'Entrate', 'Uscite', 'Investito', 'Risparmio']
+        for col in ['Entrate', 'Uscite', 'Investito', 'Risparmio']:
+            df_display[col] = df_display[col].apply(lambda x: f"€ {x:,.0f}")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+
+def render_sankey_flow(df_budget: pd.DataFrame, year: int = None):
+    """Diagramma Sankey del flusso di denaro."""
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    df = df_budget.copy()
+    if year:
+        df = df[df['date'].dt.year == year]
+    
+    if df.empty:
+        st.info(f"Nessun dato per l'anno {year}.")
+        return
+    
+    # Calcola valori
+    entrate = df[df['type'] == 'Entrata']['amount'].sum()
+    
+    # Spese per categoria (escluso investimento)
+    df_spese = df[(df['type'] == 'Uscita') & (df['category'] != 'Investimento')]
+    spese_per_cat = df_spese.groupby('category')['amount'].sum().to_dict()
+    
+    investito = df[(df['type'] == 'Uscita') & (df['category'] == 'Investimento')]['amount'].sum()
+    totale_spese = sum(spese_per_cat.values())
+    risparmio = entrate - totale_spese - investito
+    
+    if entrate == 0:
+        st.info("Nessuna entrata registrata.")
+        return
+    
+    # Costruisci nodi e link
+    labels = ["Entrate", "Spese", "Investimenti", "Risparmio Liquido"] + list(spese_per_cat.keys())
+    
+    # Colori per nodi
+    node_colors = ['#28a745', '#dc3545', '#007bff', '#ffc107'] + ['#ff6b6b'] * len(spese_per_cat)
+    
+    source = []
+    target = []
+    value = []
+    
+    # Entrate -> Spese, Investimenti, Risparmio
+    if totale_spese > 0:
+        source.append(0)
+        target.append(1)
+        value.append(totale_spese)
+    
+    if investito > 0:
+        source.append(0)
+        target.append(2)
+        value.append(investito)
+    
+    if risparmio > 0:
+        source.append(0)
+        target.append(3)
+        value.append(risparmio)
+    
+    # Spese -> Categorie
+    for i, (cat, amt) in enumerate(spese_per_cat.items()):
+        if amt > 0:
+            source.append(1)
+            target.append(4 + i)
+            value.append(amt)
+    
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=15,
+            thickness=20,
+            line=dict(color="black", width=0.5),
+            label=labels,
+            color=node_colors
+        ),
+        link=dict(
+            source=source,
+            target=target,
+            value=value
+        )
+    )])
+    
+    title = f"Flusso di Denaro {year}" if year else "Flusso di Denaro (Totale)"
+    fig.update_layout(
+        title=title,
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_general_50_30_20(df_budget: pd.DataFrame):
+    """Verifica la regola 50/30/20 su tutto il periodo."""
+    st.subheader("🎯 Regola 50/30/20 (Generale)")
+    
+    if df_budget.empty:
+        st.info("Nessun dato disponibile.")
+        return
+    
+    # Categorie di necessità e desideri (stesse del check mensile)
+    NECESSITA = ['Affitto/Casa', 'Spesa Alimentare', 'Trasporti', 'Bollette', 'Salute']
+    DESIDERI = ['Ristoranti/Svago', 'Viaggi', 'Shopping', 'Altro']
+    
+    entrate = df_budget[df_budget['type'] == 'Entrata']['amount'].sum()
+    
+    if entrate == 0:
+        st.warning("Nessuna entrata registrata.")
+        return
+    
+    df_spese = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] != 'Investimento')]
+    investimenti = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] == 'Investimento')]['amount'].sum()
+    
+    spese_necessita = df_spese[df_spese['category'].isin(NECESSITA)]['amount'].sum()
+    spese_desideri = df_spese[df_spese['category'].isin(DESIDERI)]['amount'].sum()
+    spese_totali = df_spese['amount'].sum()
+    risparmio_puro = entrate - spese_totali - investimenti
+    risparmio_totale = risparmio_puro + investimenti
+    
+    # Percentuali
+    pct_necessita = (spese_necessita / entrate) * 100
+    pct_desideri = (spese_desideri / entrate) * 100
+    pct_risparmio = (risparmio_totale / entrate) * 100
+    pct_investimenti = (investimenti / entrate) * 100
+    pct_risparmio_puro = (risparmio_puro / entrate) * 100
+    
+    # Layout a colonne
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        delta_n = pct_necessita - 50
+        color = "normal" if pct_necessita <= 50 else "inverse"
+        st.metric(
+            "🏠 Necessità",
+            f"{pct_necessita:.1f}%",
+            delta=f"{delta_n:+.1f}% vs 50%",
+            delta_color="inverse"
+        )
+        st.caption(f"€ {spese_necessita:,.0f} totali")
+    
+    with c2:
+        delta_d = pct_desideri - 30
+        st.metric(
+            "🎉 Desideri",
+            f"{pct_desideri:.1f}%",
+            delta=f"{delta_d:+.1f}% vs 30%",
+            delta_color="inverse"
+        )
+        st.caption(f"€ {spese_desideri:,.0f} totali")
+    
+    with c3:
+        delta_r = pct_risparmio - 20
+        st.metric(
+            "💰 Risparmio + Investimento",
+            f"{pct_risparmio:.1f}%",
+            delta=f"{delta_r:+.1f}% vs 20%",
+            delta_color="normal"
+        )
+        st.caption(f"💵 Liquido: € {risparmio_puro:,.0f} ({pct_risparmio_puro:.1f}%)")
+        st.caption(f"📈 Investito: € {investimenti:,.0f} ({pct_investimenti:.1f}%)")
+    
+    # Grafico a torta
+    fig = go.Figure(data=[go.Pie(
+        labels=['Necessità', 'Desideri', 'Risparmio Liquido', 'Investimenti'],
+        values=[spese_necessita, spese_desideri, max(0, risparmio_puro), investimenti],
+        hole=0.4,
+        marker_colors=['#dc3545', '#fd7e14', '#28a745', '#007bff'],
+        textinfo='label+percent'
+    )])
+    
+    fig.update_layout(
+        title="Distribuzione Generale",
+        margin=dict(l=10, r=10, t=40, b=10),
+        showlegend=False
+    )
+    
+    st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
+    
+    # Valutazione complessiva
+    status = []
+    if pct_necessita <= 55:
+        status.append("✅ Necessità sotto controllo")
+    else:
+        status.append("⚠️ Necessità troppo alte")
+    
+    if pct_desideri <= 35:
+        status.append("✅ Desideri sotto controllo")
+    else:
+        status.append("⚠️ Desideri troppo alti")
+    
+    if pct_risparmio >= 15:
+        status.append("✅ Buon tasso di risparmio")
+    else:
+        status.append("⚠️ Risparmio insufficiente")
+    
+    st.info(" | ".join(status))
