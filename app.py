@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # Importazioni modularizzate
-from database.connection import get_data, save_data
+from database.connection import get_data, save_data, insert_single_mapping
 from services.portfolio_service import calculate_portfolio_view, calculate_liquidity, get_historical_portfolio
 from ui.components import make_sidebar
 from ui.dashboard_components import render_kpis, render_composition_tabs, render_assets_table, render_historical_chart
@@ -29,11 +29,15 @@ if df_trans.empty:
     st.info("👋 Benvenuto! Il database è vuoto. Vai su 'Gestione Dati' per importare il CSV.")
     st.stop()
 
-# Calcola TUTTI gli ISIN presenti nelle transazioni (non solo quelli con quantità > 0)
-# Questo permette di mappare anche asset venduti, per avere prezzi storici completi nei grafici
-all_isins = df_trans['isin'].unique() if not df_trans.empty else []
+# Calcola solo gli ISIN attualmente posseduti (quantità > 0)
+# Gli asset venduti mantengono la mappatura esistente ma non richiedono nuove mappature
+if not df_trans.empty:
+    holdings = df_trans.groupby('isin')['quantity'].sum()
+    held_isins = holdings[holdings > 0].index.tolist()
+else:
+    held_isins = []
 mapped_isins = df_map['isin'].unique() if not df_map.empty else []
-missing_isins = [i for i in all_isins if i not in mapped_isins]
+missing_isins = [i for i in held_isins if i not in mapped_isins]
 if missing_isins:
     st.warning(f"⚠️ Ci sono {len(missing_isins)} nuovi asset da mappare!")
     with st.form("quick_mapping_form"):
@@ -49,11 +53,18 @@ if missing_isins:
                 new_mappings.append({'isin': isin, 'ticker': ticker_input.strip(), 'category': category_input})
         if st.form_submit_button("💾 Salva e Aggiorna"):
             if new_mappings:
-                new_df = pd.DataFrame(new_mappings)
-                # Usa append per evitare di perdere gli ID esistenti e rompere le foreign keys
-                save_data(new_df, "mapping", method='append')
-                st.success("Mappatura salvata! Ricarico la pagina...")
-                st.rerun()
+                saved = 0
+                for m in new_mappings:
+                    result = insert_single_mapping(
+                        isin=m['isin'], ticker=m['ticker'], category=m['category']
+                    )
+                    if result is not None:
+                        saved += 1
+                if saved > 0:
+                    st.success(f"Mappatura salvata ({saved} asset)! Ricarico la pagina...")
+                    st.rerun()
+                else:
+                    st.error("Nessuna mappatura salvata. Verifica i dati inseriti.")
     st.stop() 
 
 # --- CALCOLI PRINCIPALI ---

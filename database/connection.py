@@ -23,9 +23,9 @@ def get_data(table_name: str) -> pd.DataFrame:
     """
     conn = get_db_connection()
     try:
-        # ttl=5 per evitare query troppo frequenti se chiamato in loop, 
-        # ma la cache principale è gestita da @st.cache_data
-        df = conn.query(f'SELECT * FROM "{table_name}";', ttl=5)
+        # ttl=0 forza sempre una query fresca; la cache è gestita
+        # dal decoratore esterno @st.cache_data(ttl=600)
+        df = conn.query(f'SELECT * FROM "{table_name}";', ttl=0)
         if not df.empty and 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
         return df
@@ -50,10 +50,6 @@ def save_data(df: pd.DataFrame, table_name: str, method: str = 'replace') -> Non
         # Assicura che le date siano datetime corretti
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
-        
-        # Mapping va sempre rimpiazzato per evitare duplicati sporchi
-        if table_name == 'mapping': 
-            method = 'replace'
             
         df.to_sql(name=table_name, con=conn.engine, if_exists=method, index=False)
         
@@ -61,6 +57,158 @@ def save_data(df: pd.DataFrame, table_name: str, method: str = 'replace') -> Non
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Errore durante il salvataggio della tabella '{table_name}': {e}")
+
+def insert_single_mapping(isin: str, ticker: str, category: str, proxy_ticker: Optional[str] = None) -> Optional[int]:
+    """
+    Inserisce una singola riga nella tabella mapping usando SQL diretto.
+    Ritorna il mapping_id generato (SERIAL), o None in caso di errore/duplicato.
+    NON tocca le righe esistenti.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            result = s.execute(
+                text(
+                    "INSERT INTO mapping (isin, ticker, category, proxy_ticker) "
+                    "VALUES (:isin, :ticker, :category, :proxy) "
+                    "ON CONFLICT (isin) DO UPDATE SET "
+                    "  ticker = EXCLUDED.ticker, "
+                    "  category = EXCLUDED.category, "
+                    "  proxy_ticker = EXCLUDED.proxy_ticker "
+                    "RETURNING id"
+                ),
+                {'isin': isin, 'ticker': ticker, 'category': category, 'proxy': proxy_ticker},
+            )
+            row = result.fetchone()
+            s.commit()
+        st.cache_data.clear()
+        return row[0] if row else None
+    except Exception as e:
+        st.error(f"Errore inserimento mappatura per ISIN={isin}: {e}")
+        return None
+
+
+def insert_single_transaction(tx_dict: dict) -> bool:
+    """
+    Inserisce una singola transazione con SQL diretto.
+    Usa ON CONFLICT per evitare duplicati sull'id (TEXT PRIMARY KEY).
+    """
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            s.execute(
+                text(
+                    "INSERT INTO transactions (id, date, product, isin, quantity, local_value, fees, currency) "
+                    "VALUES (:id, :date, :product, :isin, :quantity, :local_value, :fees, :currency) "
+                    "ON CONFLICT (id) DO NOTHING"
+                ),
+                tx_dict,
+            )
+            s.commit()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Errore inserimento transazione: {e}")
+        return False
+
+
+def update_transaction(tx_id: str, updates: dict) -> bool:
+    """
+    Aggiorna i campi di una transazione esistente.
+    `updates` è un dict con solo i campi da aggiornare (es. {'quantity': 10, 'local_value': -500}).
+    """
+    allowed = {'date', 'product', 'isin', 'quantity', 'local_value', 'fees', 'currency'}
+    updates = {k: v for k, v in updates.items() if k in allowed}
+    if not updates:
+        return False
+    conn = get_db_connection()
+    try:
+        set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+        params = {**updates, 'tx_id': tx_id}
+        with conn.session as s:
+            s.execute(text(f"UPDATE transactions SET {set_clause} WHERE id = :tx_id"), params)
+            s.commit()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Errore aggiornamento transazione: {e}")
+        return False
+
+
+def delete_transactions(tx_ids: list) -> int:
+    """
+    Elimina una o più transazioni per ID.
+    Ritorna il numero di righe eliminate.
+    Sicuro: transactions non ha foreign key che puntano ad essa.
+    """
+    if not tx_ids:
+        return 0
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            result = s.execute(
+                text("DELETE FROM transactions WHERE id = ANY(:ids)"),
+                {'ids': list(tx_ids)}
+            )
+            s.commit()
+        st.cache_data.clear()
+        return result.rowcount
+    except Exception as e:
+        st.error(f"Errore eliminazione transazioni: {e}")
+        return 0
+
+
+def replace_all_mappings(df: pd.DataFrame) -> bool:
+    """
+    Aggiorna la tabella mapping usando UPSERT + DELETE degli ISIN rimossi.
+    PRESERVA gli ID esistenti per non rompere i riferimenti in prices/asset_allocation.
+    """
+    if df.empty:
+        return False
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            # 1. Raccogli gli ISIN nel nuovo DataFrame
+            new_isins = set(df['isin'].dropna().str.strip().tolist())
+            new_isins.discard('')
+
+            # 2. Elimina solo le righe il cui ISIN NON è più presente
+            if new_isins:
+                s.execute(
+                    text("DELETE FROM mapping WHERE isin NOT IN :isins"),
+                    {'isins': tuple(new_isins)}
+                )
+            else:
+                s.execute(text("DELETE FROM mapping"))
+
+            # 3. UPSERT: inserisci nuovi o aggiorna ticker/category per esistenti
+            for _, row in df.iterrows():
+                isin = str(row.get('isin', '')).strip()
+                if not isin:
+                    continue
+                s.execute(
+                    text(
+                        "INSERT INTO mapping (isin, ticker, category, proxy_ticker) "
+                        "VALUES (:isin, :ticker, :category, :proxy) "
+                        "ON CONFLICT (isin) DO UPDATE SET "
+                        "  ticker = EXCLUDED.ticker, "
+                        "  category = EXCLUDED.category, "
+                        "  proxy_ticker = EXCLUDED.proxy_ticker"
+                    ),
+                    {
+                        'isin': isin,
+                        'ticker': str(row.get('ticker', '')).strip(),
+                        'category': str(row.get('category', '')).strip(),
+                        'proxy': row.get('proxy_ticker') if pd.notna(row.get('proxy_ticker')) else None,
+                    },
+                )
+            s.commit()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Errore sostituzione mappatura: {e}")
+        return False
+
 
 def save_allocation_json(mapping_id: int, geo_dict: Dict[str, float], sec_dict: Dict[str, float]) -> None:
     """
