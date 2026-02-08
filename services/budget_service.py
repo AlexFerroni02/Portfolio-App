@@ -27,6 +27,103 @@ def get_monthly_summary(selected_month: str, df_budget: pd.DataFrame, df_trans: 
         "investito_mese": investito_mese
     }
 
+
+def get_general_summary(df_budget: pd.DataFrame) -> Dict[str, float]:
+    """
+    Calcola un riepilogo finanziario generale su tutto il periodo.
+    Restituisce totali e medie mensili.
+    """
+    if df_budget.empty:
+        return {k: 0.0 for k in ["totale_entrate", "totale_uscite", "totale_investito", 
+                                  "totale_risparmio", "media_entrate", "media_uscite",
+                                  "media_investito", "media_risparmio", "num_mesi"]}
+    
+    # Conta mesi unici
+    df_budget['mese'] = df_budget['date'].dt.to_period('M')
+    num_mesi = df_budget['mese'].nunique()
+    
+    # Totali
+    totale_entrate = df_budget[df_budget['type'] == 'Entrata']['amount'].sum()
+    totale_uscite = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] != 'Investimento')]['amount'].sum()
+    totale_investito = df_budget[(df_budget['type'] == 'Uscita') & (df_budget['category'] == 'Investimento')]['amount'].sum()
+    totale_risparmio = totale_entrate - totale_uscite - totale_investito
+    
+    # Medie (se ci sono mesi)
+    if num_mesi > 0:
+        media_entrate = totale_entrate / num_mesi
+        media_uscite = totale_uscite / num_mesi
+        media_investito = totale_investito / num_mesi
+        media_risparmio = totale_risparmio / num_mesi
+    else:
+        media_entrate = media_uscite = media_investito = media_risparmio = 0
+    
+    return {
+        "totale_entrate": totale_entrate,
+        "totale_uscite": totale_uscite,
+        "totale_investito": totale_investito,
+        "totale_risparmio": totale_risparmio,
+        "media_entrate": media_entrate,
+        "media_uscite": media_uscite,
+        "media_investito": media_investito,
+        "media_risparmio": media_risparmio,
+        "num_mesi": num_mesi
+    }
+
+
+def get_category_averages(df_budget: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcola la media mensile per ogni categoria di spesa.
+    Restituisce un DataFrame ordinato per importo decrescente.
+    """
+    if df_budget.empty:
+        return pd.DataFrame()
+    
+    df = df_budget.copy()
+    df['mese'] = df['date'].dt.to_period('M')
+    num_mesi = df['mese'].nunique()
+    
+    # Solo uscite (incluso investimento)
+    df_spese = df[df['type'] == 'Uscita']
+    
+    if df_spese.empty or num_mesi == 0:
+        return pd.DataFrame()
+    
+    # Totale per categoria
+    totali = df_spese.groupby('category')['amount'].sum().reset_index()
+    totali['media_mensile'] = totali['amount'] / num_mesi
+    totali = totali.sort_values('media_mensile', ascending=False)
+    
+    return totali
+
+
+def get_yearly_summary(df_budget: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcola il riepilogo per ogni anno disponibile.
+    """
+    if df_budget.empty:
+        return pd.DataFrame()
+    
+    df = df_budget.copy()
+    df['anno'] = df['date'].dt.year
+    
+    result = []
+    for anno in sorted(df['anno'].unique()):
+        df_anno = df[df['anno'] == anno]
+        entrate = df_anno[df_anno['type'] == 'Entrata']['amount'].sum()
+        uscite = df_anno[(df_anno['type'] == 'Uscita') & (df_anno['category'] != 'Investimento')]['amount'].sum()
+        investito = df_anno[(df_anno['type'] == 'Uscita') & (df_anno['category'] == 'Investimento')]['amount'].sum()
+        risparmio = entrate - uscite - investito
+        
+        result.append({
+            'anno': anno,
+            'entrate': entrate,
+            'uscite': uscite,
+            'investito': investito,
+            'risparmio': risparmio
+        })
+    
+    return pd.DataFrame(result)
+
 def calculate_net_worth_trend(df_chart: pd.DataFrame) -> Tuple[pd.DataFrame, LinearRegression]:
     """
     Calcola la linea di trend per il grafico del patrimonio netto.
