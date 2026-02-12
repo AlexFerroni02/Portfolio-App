@@ -28,13 +28,14 @@ def render_asset_header(kpi_data: Dict[str, Any]):
     """
     Renderizza l'header della pagina con nome, ticker, ISIN e link a JustETF.
     """
-    col_title, col_btn = st.columns([4, 1])
+    col_title, col_btn = st.columns([3, 1])
     with col_title:
         st.header(f"{kpi_data.get('product_name', 'N/A')}")
         st.caption(f"Ticker: **{kpi_data.get('ticker', 'N/A')}** | ISIN: **{kpi_data.get('isin', 'N/A')}**")
     with col_btn:
-        if 'ETF' in kpi_data.get('product_name', ''):
-            st.link_button("🔎 Vedi su JustETF", f"https://www.justetf.com/it/etf-profile.html?isin={kpi_data.get('isin', '')}")
+        isin = kpi_data.get('isin', '')
+        if isin and isin != 'N/A':
+            st.link_button("🔎 JustETF", f"https://www.justetf.com/it/etf-profile.html?isin={isin}", use_container_width=True)
 
 
 def render_asset_kpis(kpi_data: Dict[str, Any]):
