@@ -4,4 +4,4 @@ credentials.json
 venv/
 # Cache e file compilati di Python
 __pycache__/
-*.pyc
+*.pyc.streamlit/secrets*.toml
