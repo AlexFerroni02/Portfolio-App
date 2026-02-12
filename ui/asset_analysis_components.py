@@ -43,9 +43,10 @@ def render_asset_kpis(kpi_data: Dict[str, Any]):
     """
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Quantità", f"{kpi_data.get('quantity', 0):.2f}")
-    c2.metric("Prezzo Corrente", f"€ {kpi_data.get('last_price', 0):.2f}")
-    c3.metric("Valore di Mercato", f"€ {kpi_data.get('market_value', 0):,.2f}")
-    c4.metric("P&L", f"€ {kpi_data.get('pnl', 0):,.2f}", delta=f"{kpi_data.get('pnl_perc', 0):.2f}%")
+    c2.metric("Prezzo Corrente 🔴", f"€ {kpi_data.get('last_price', 0):.2f}", help="Prezzo live da Yahoo Finance")
+    c3.metric("Valore di Mercato 🔴", f"€ {kpi_data.get('market_value', 0):,.2f}", help="Calcolato con prezzo live")
+    c4.metric("P&L 🔴", f"€ {kpi_data.get('pnl', 0):,.2f}", delta=f"{kpi_data.get('pnl_perc', 0):.2f}%", help="Calcolato con prezzo live")
+    st.caption("🔴 Dati calcolati con il prezzo live da Yahoo Finance")
     st.divider()
 
 """

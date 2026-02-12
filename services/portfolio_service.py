@@ -19,10 +19,12 @@ def calculate_portfolio_view(df_trans, df_map, df_prices):
         last_p = pd.Series(dtype='float64')
     view = df_full.groupby(['product', 'mapping_id', 'category']).agg(
         quantity=('quantity', 'sum'),
-        local_value=('local_value', 'sum')
+        local_value=('local_value', 'sum'),
+        total_fees=('fees', 'sum')
     ).reset_index()
     view = view[view['quantity'] > 0.001].copy()
-    view['net_invested'] = -view['local_value']
+    # net_invested include le commissioni: capitale sborsato + fees
+    view['net_invested'] = -view['local_value'] + view['total_fees']
     view['curr_price'] = view['mapping_id'].map(last_p)
     view['mkt_val'] = view['quantity'] * view['curr_price']
     view['pnl'] = view['mkt_val'] - view['net_invested']
@@ -75,7 +77,12 @@ def get_historical_portfolio(df_trans, df_map, df_prices):
     price_matrix = df_prices.pivot_table(index='date', columns='mapping_id', values='close_price', aggfunc='last').reindex(full_idx).ffill()
     common_cols = daily_holdings.columns.intersection(price_matrix.columns)
     daily_value = (daily_holdings[common_cols] * price_matrix[common_cols]).sum(axis=1)
-    daily_inv_change = df_full.pivot_table(index='date', values='local_value', aggfunc='sum').fillna(0)
-    daily_invested = -daily_inv_change.reindex(full_idx, fill_value=0).cumsum()
-    hdf = pd.DataFrame({'Data': full_idx, 'Valore': daily_value, 'Investito': daily_invested['local_value']})
+    # Calcola l'investito giornaliero includendo le commissioni
+    daily_cost = df_full.groupby('date').agg(
+        local_value=('local_value', 'sum'),
+        fees=('fees', 'sum')
+    )
+    daily_cost['invested_change'] = -daily_cost['local_value'] + daily_cost['fees']
+    daily_invested = daily_cost[['invested_change']].reindex(full_idx, fill_value=0).cumsum()
+    hdf = pd.DataFrame({'Data': full_idx, 'Valore': daily_value, 'Investito': daily_invested['invested_change']})
     return hdf
