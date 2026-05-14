@@ -315,6 +315,19 @@ def render_mapping_tab():
     df_map_full = get_data("mapping")
     df_trans = get_data("transactions")
 
+    # Normalizza codici prima di qualsiasi filtro/merge per evitare mismatch case-sensitive.
+    if not df_map_full.empty and 'isin' in df_map_full.columns:
+        df_map_full = df_map_full.copy()
+        df_map_full['isin'] = df_map_full['isin'].astype(str).str.strip().str.upper()
+        if 'ticker' in df_map_full.columns:
+            df_map_full['ticker'] = df_map_full['ticker'].astype(str).str.strip().str.upper()
+        if 'category' in df_map_full.columns:
+            df_map_full['category'] = df_map_full['category'].astype(str).str.strip()
+
+    if not df_trans.empty and 'isin' in df_trans.columns:
+        df_trans = df_trans.copy()
+        df_trans['isin'] = df_trans['isin'].astype(str).str.strip().str.upper()
+
     # Calcola ISIN posseduti vs venduti
     if not df_trans.empty:
         holdings = df_trans.groupby('isin')['quantity'].sum()
@@ -397,7 +410,13 @@ def render_mapping_tab():
         # Riunisci con le mappature nascoste (solo in modalità filtrata)
         if not df_map_hidden.empty:
             cols_keep = [c for c in df_map_hidden.columns if c.lower() != 'id']
-            df_to_process = pd.concat([df_to_process, df_map_hidden[cols_keep]], ignore_index=True)
+            hidden_df = df_map_hidden[cols_keep].copy()
+            hidden_df['isin'] = hidden_df['isin'].astype(str).str.strip().str.upper()
+            hidden_df['ticker'] = hidden_df['ticker'].astype(str).str.strip().str.upper()
+            hidden_df['category'] = hidden_df['category'].astype(str).str.strip()
+
+            df_to_process = pd.concat([df_to_process, hidden_df], ignore_index=True)
+            # Dopo la normalizzazione, la prima occorrenza è quella visibile/editata.
             df_to_process.drop_duplicates(subset=['isin'], keep='first', inplace=True)
 
         save_ok = replace_all_mappings(df_to_process)
