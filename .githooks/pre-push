@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+echo "[pre-push] Running test suite before push..."
+
+run_pytest() {
+  local python_cmd="$1"
+  "$python_cmd" -m pytest --cov=services --cov=ui --cov-report=xml
+}
+
+if [[ -x "$ROOT_DIR/venv/bin/python" ]]; then
+  run_pytest "$ROOT_DIR/venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  run_pytest "python3"
+elif command -v python >/dev/null 2>&1; then
+  run_pytest "python"
+else
+  echo "[pre-push] ERROR: Python interpreter not found. Push blocked."
+  exit 1
+fi
+
+echo "[pre-push] All tests passed. Proceeding with push."

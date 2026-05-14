@@ -88,6 +88,19 @@ password = "your_password" # <-- PASTE YOUR PASSWORD FROM NEON
 streamlit run app.py
 ```
 
+### E. Block Push When Tests Fail (recommended)
+
+This repository includes a versioned pre-push Git hook that runs the same pytest command used in CI.
+
+Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-push
+```
+
+After this setup, every `git push` is blocked automatically if tests fail.
+
 ---
 
 ## 3. Deployment — GitHub + Streamlit Cloud
