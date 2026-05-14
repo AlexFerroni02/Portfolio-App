@@ -315,6 +315,25 @@ def render_mapping_tab():
     df_map_full = get_data("mapping")
     df_trans = get_data("transactions")
 
+    # Difesa runtime: in alcuni ambienti cloud la tabella puo arrivare vuota/senza schema.
+    # Manteniamo sempre le colonne minime per evitare KeyError in UI.
+    if df_map_full.empty:
+        df_map_full = pd.DataFrame(columns=['isin', 'ticker', 'category', 'proxy_ticker'])
+    for col_name, default_value in [
+        ('isin', ''),
+        ('ticker', ''),
+        ('category', 'Azionario'),
+        ('proxy_ticker', None),
+    ]:
+        if col_name not in df_map_full.columns:
+            df_map_full[col_name] = default_value
+
+    if df_trans.empty:
+        df_trans = pd.DataFrame(columns=['isin', 'quantity'])
+    for col_name, default_value in [('isin', ''), ('quantity', 0.0)]:
+        if col_name not in df_trans.columns:
+            df_trans[col_name] = default_value
+
     # Normalizza codici prima di qualsiasi filtro/merge per evitare mismatch case-sensitive.
     if not df_map_full.empty and 'isin' in df_map_full.columns:
         df_map_full = df_map_full.copy()
@@ -330,6 +349,7 @@ def render_mapping_tab():
 
     # Calcola ISIN posseduti vs venduti
     if not df_trans.empty:
+        df_trans['quantity'] = pd.to_numeric(df_trans['quantity'], errors='coerce').fillna(0.0)
         holdings = df_trans.groupby('isin')['quantity'].sum()
         owned_isin = holdings[holdings > 0].index.tolist()
         sold_isin = holdings[holdings <= 0].index.tolist()
