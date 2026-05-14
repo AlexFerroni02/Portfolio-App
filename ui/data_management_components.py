@@ -360,7 +360,13 @@ def render_mapping_tab():
     # Toggle per mostrare anche gli asset venduti / non più posseduti
     show_all = st.toggle("📦 Mostra anche asset venduti / non più posseduti", value=False, key="show_sold_assets")
 
-    if show_all:
+    # Se le transazioni non sono disponibili (es. timeout DB temporaneo), evita tabella vuota fuorviante.
+    force_show_all = False
+    if df_trans.empty and not df_map_full.empty:
+        force_show_all = True
+        st.warning("⚠️ Transazioni non disponibili al momento: mostro tutte le mappature per sicurezza.")
+
+    if show_all or force_show_all:
         # Mostra tutte le mappature + aggiungi ISIN venduti non ancora mappati
         df_map = df_map_full.copy()
         unmapped_sold = [i for i in sold_isin if i not in df_map_full['isin'].values]

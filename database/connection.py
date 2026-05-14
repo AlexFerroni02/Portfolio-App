@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import unicodedata
+import time
 from sqlalchemy import text, bindparam
 from typing import Optional, Dict, Any, Union
 
@@ -50,23 +51,37 @@ def get_db_connection():
     """
     return st.connection("postgresql", type="sql")
 
+def _read_table_uncached(table_name: str) -> pd.DataFrame:
+    """Legge una tabella dal DB senza cache applicativa."""
+    conn = get_db_connection()
+    # ttl=0 forza sempre una query fresca lato Streamlit connection cache.
+    df = conn.query(f'SELECT * FROM "{table_name}";', ttl=0)
+    if not df.empty and 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
 # --- LETTURA DATI (CON CACHE STRUTTURALE) ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=120)
+def _get_data_cached(table_name: str) -> pd.DataFrame:
+    """Versione cached della lettura tabella."""
+    return _read_table_uncached(table_name)
+
+
 def get_data(table_name: str) -> pd.DataFrame:
     """
     Legge un'intera tabella dal database e restituisce un DataFrame.
-    Converte automaticamente le colonne 'date' in datetime.
+    In caso di errore transitorio fa retry e non mantiene cache stale di fallimento.
     """
-    try:
-        conn = get_db_connection()
-        # ttl=0 forza sempre una query fresca; la cache è gestita
-        # dal decoratore esterno @st.cache_data(ttl=600)
-        df = conn.query(f'SELECT * FROM "{table_name}";', ttl=0)
-        if not df.empty and 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
-        return df
-    except Exception:
-        return pd.DataFrame()
+    retries = 2
+    for attempt in range(retries + 1):
+        try:
+            return _get_data_cached(table_name)
+        except Exception:
+            _get_data_cached.clear()
+            if attempt < retries:
+                time.sleep(0.25 * (attempt + 1))
+    return pd.DataFrame()
 
 # --- SALVATAGGIO DATI ---
 def save_data(df: pd.DataFrame, table_name: str, method: str = 'replace') -> None:
