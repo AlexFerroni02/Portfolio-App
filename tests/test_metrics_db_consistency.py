@@ -12,9 +12,12 @@ from services.portfolio_service import get_historical_portfolio
 
 def _load_portfolio_timeseries_from_db() -> pd.DataFrame:
     """Carica la serie storica portafoglio usando lo stesso percorso dati della pagina Metriche."""
-    df_trans = get_data("transactions")
-    df_map = get_data("mapping")
-    df_prices = get_data("prices")
+    try:
+        df_trans = get_data("transactions")
+        df_map = get_data("mapping")
+        df_prices = get_data("prices")
+    except Exception as exc:
+        pytest.skip(f"DB non disponibile nel runner: {exc}")
 
     if df_trans.empty or df_map.empty or df_prices.empty:
         pytest.skip("DB non pronto: transazioni/mapping/prezzi mancanti")

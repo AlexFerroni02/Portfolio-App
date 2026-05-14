@@ -57,8 +57,8 @@ def get_data(table_name: str) -> pd.DataFrame:
     Legge un'intera tabella dal database e restituisce un DataFrame.
     Converte automaticamente le colonne 'date' in datetime.
     """
-    conn = get_db_connection()
     try:
+        conn = get_db_connection()
         # ttl=0 forza sempre una query fresca; la cache è gestita
         # dal decoratore esterno @st.cache_data(ttl=600)
         df = conn.query(f'SELECT * FROM "{table_name}";', ttl=0)
