@@ -26,7 +26,7 @@ initial_balance_exists = not df_budget_check.empty and not df_budget_check[df_bu
 
 # Definizione dei Tab
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "� Transazioni", 
+    "📥 Transazioni", 
     "🔗 Mappatura Ticker", 
     "🔄 Aggiorna Prezzi", 
     "💸 Movimenti Bilancio", 

@@ -52,7 +52,7 @@ def run_benchmark_simulation(bench_ticker: str, df_trans: pd.DataFrame, df_map: 
         raise ConnectionError(f"Errore durante il download dei dati per {bench_ticker}: {e}")
 
     timeline = pd.date_range(start=start_date, end=end_date, freq='D').normalize()
-    my_val_history, bench_val_history = [], []
+    my_val_history, bench_val_history, cash_flow_history = [], [], []
     pivot_user = pd.DataFrame()
     if not df_prices.empty:
         df_prices_with_ticker = df_prices.merge(df_map[['id', 'ticker']], left_on='mapping_id', right_on='id', how='left')
@@ -99,9 +99,34 @@ def run_benchmark_simulation(bench_ticker: str, df_trans: pd.DataFrame, df_map: 
         
         my_val_history.append(val_user)
         bench_val_history.append(val_bench)
+        cash_flow_history.append(daily_cash)
 
-    df_chart = pd.DataFrame({'Data': timeline, 'Tu': my_val_history, 'Benchmark': bench_val_history})
+    df_chart = pd.DataFrame(
+        {
+            'Data': timeline,
+            'Tu': my_val_history,
+            'Benchmark': bench_val_history,
+            'CashFlow': cash_flow_history,
+        }
+    )
     df_chart = df_chart[(df_chart['Tu'] > 0) | (df_chart['Benchmark'] > 0)].reset_index(drop=True)
+
+    prev_user = df_chart['Tu'].shift(1)
+    prev_bench = df_chart['Benchmark'].shift(1)
+    adjusted_user_base = prev_user + df_chart['CashFlow']
+    adjusted_bench_base = prev_bench + df_chart['CashFlow']
+
+    df_chart['Tu_Return'] = pd.NA
+    df_chart['Benchmark_Return'] = pd.NA
+
+    valid_user_rows = adjusted_user_base > 0
+    valid_bench_rows = adjusted_bench_base > 0
+    df_chart.loc[valid_user_rows, 'Tu_Return'] = (
+        df_chart.loc[valid_user_rows, 'Tu'] / adjusted_user_base.loc[valid_user_rows]
+    ) - 1.0
+    df_chart.loc[valid_bench_rows, 'Benchmark_Return'] = (
+        df_chart.loc[valid_bench_rows, 'Benchmark'] / adjusted_bench_base.loc[valid_bench_rows]
+    ) - 1.0
     
     df_log = pd.DataFrame(log_transactions).round(2)
     

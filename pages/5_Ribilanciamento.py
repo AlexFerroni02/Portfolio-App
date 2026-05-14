@@ -44,7 +44,7 @@ else:
 invest_amount, new_total = render_investment_amount_input(total_portfolio)
 
 # --- 3. Input utente: Distribuzione per Ticker ---
-global_pct_inputs, global_ticker_prices, ticker_to_cat = render_ticker_distribution(
+global_pct_inputs, global_ticker_prices, ticker_to_cat, invalid_categories = render_ticker_distribution(
     assets_view, asset_classes
 )
 
@@ -52,6 +52,11 @@ global_pct_inputs, global_ticker_prices, ticker_to_cat = render_ticker_distribut
 st.header("3️⃣ Calcola Ribilanciamento")
 
 if st.button("Calcola Ribilanciamento"):
+    if invalid_categories:
+        invalid_list = ", ".join(invalid_categories.keys())
+        st.error(f"❌ Correggi prima le categorie con distribuzione non valida: {invalid_list}")
+        st.stop()
+
     # Build ticker_targets
     ticker_targets = build_ticker_targets(
         global_pct_inputs, ticker_to_cat, asset_classes, new_total

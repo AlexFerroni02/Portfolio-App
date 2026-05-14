@@ -130,13 +130,14 @@ def render_expense_trend_chart(df_budget: pd.DataFrame, months: int = 6):
     df_agg = df_filtered.groupby(['mese', 'type'])['amount'].sum().reset_index()
     df_pivot = df_agg.pivot(index='mese', columns='type', values='amount').fillna(0).reset_index()
     df_pivot = df_pivot.sort_values('mese')
+    df_pivot['mese_label'] = pd.to_datetime(df_pivot['mese'] + '-01', errors='coerce').dt.strftime('%Y-%m')
     
     # Crea grafico
     fig = go.Figure()
     
     if 'Uscita' in df_pivot.columns:
         fig.add_trace(go.Scatter(
-            x=df_pivot['mese'], y=df_pivot['Uscita'],
+            x=df_pivot['mese_label'], y=df_pivot['Uscita'],
             name='Spese', mode='lines+markers',
             line=dict(color='#dc3545', width=3),
             fill='tozeroy', fillcolor='rgba(220, 53, 69, 0.2)'
@@ -144,15 +145,16 @@ def render_expense_trend_chart(df_budget: pd.DataFrame, months: int = 6):
     
     if 'Entrata' in df_pivot.columns:
         fig.add_trace(go.Scatter(
-            x=df_pivot['mese'], y=df_pivot['Entrata'],
+            x=df_pivot['mese_label'], y=df_pivot['Entrata'],
             name='Entrate', mode='lines+markers',
             line=dict(color='#28a745', width=3)
         ))
     
     fig.update_layout(
-        title=None,
+        title="Trend Entrate vs Spese",
         xaxis_title="Mese",
         yaxis_title="Importo (€)",
+        xaxis=dict(type='category'),
         hovermode='x unified',
         margin=dict(l=10, r=10, t=10, b=10)
     )

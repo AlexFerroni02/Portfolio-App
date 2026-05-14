@@ -3,6 +3,28 @@ import pandas as pd
 import plotly.graph_objects as go
 from ui.components import style_chart_for_mobile
 
+
+def _build_cumulative_gain_df(df_chart: pd.DataFrame) -> pd.DataFrame:
+    """Costruisce la serie di guadagno reale cumulato (%) per portafoglio e benchmark."""
+    gain_df = df_chart.copy()
+    required_cols = {'CashFlow', 'Tu', 'Benchmark'}
+    if not required_cols.issubset(gain_df.columns):
+        return pd.DataFrame(columns=['Data', 'Tu_GainPct', 'Benchmark_GainPct'])
+
+    invested = pd.to_numeric(gain_df['CashFlow'], errors='coerce').fillna(0.0).cumsum()
+    valid_rows = invested > 0
+
+    gain_df['Tu_GainPct'] = 0.0
+    gain_df['Benchmark_GainPct'] = 0.0
+
+    gain_df.loc[valid_rows, 'Tu_GainPct'] = (
+        pd.to_numeric(gain_df.loc[valid_rows, 'Tu'], errors='coerce') / invested.loc[valid_rows] - 1.0
+    ) * 100.0
+    gain_df.loc[valid_rows, 'Benchmark_GainPct'] = (
+        pd.to_numeric(gain_df.loc[valid_rows, 'Benchmark'], errors='coerce') / invested.loc[valid_rows] - 1.0
+    ) * 100.0
+    return gain_df[['Data', 'Tu_GainPct', 'Benchmark_GainPct']]
+
 def render_benchmark_selector() -> str:
     """Renderizza il selettore del ticker per il benchmark."""
     col1, col2 = st.columns([1, 3])
@@ -46,16 +68,57 @@ def render_performance_chart(df_chart: pd.DataFrame, bench_ticker: str):
     fig.update_layout(title_text="Valore nel Tempo (€)")
     st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
 
+
+def render_gain_chart(df_chart: pd.DataFrame, bench_ticker: str):
+    """Mostra il guadagno reale cumulato (%) nel tempo tra portafoglio e benchmark."""
+    st.subheader("📊 Guadagno Cumulato nel Tempo")
+    st.caption("Confronto del guadagno reale %: valore corrente rispetto al capitale netto investito cumulato.")
+
+    gain_df = _build_cumulative_gain_df(df_chart)
+    if gain_df.empty:
+        st.info("Dati insufficienti per il grafico del guadagno cumulato.")
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=gain_df['Data'],
+            y=gain_df['Tu_GainPct'],
+            name='Guadagno Portafoglio',
+            line=dict(color='#00CC96', width=3),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=gain_df['Data'],
+            y=gain_df['Benchmark_GainPct'],
+            name=f'Guadagno Benchmark ({bench_ticker})',
+            line=dict(color='#636EFA', width=2, dash='dot'),
+        )
+    )
+    fig.update_layout(title_text="Guadagno Cumulato (%)", yaxis_ticksuffix="%")
+    st.plotly_chart(style_chart_for_mobile(fig), width='stretch')
+
 def render_drawdown_chart(df_chart: pd.DataFrame):
     """Calcola e mostra il grafico del drawdown."""
     st.subheader("🌊 Analisi del Rischio (Drawdown)")
-    st.caption("Quanto perdi dai massimi? L'area rossa indica i tuoi crolli.")
+    st.caption("Quanto perdi dai massimi? Il calcolo usa rendimenti flow-adjusted per non falsare il drawdown su acquisti/vendite.")
     
     df_dd = df_chart.copy()
-    df_dd['Tu_Max'] = df_dd['Tu'].cummax()
-    df_dd['Bench_Max'] = df_dd['Benchmark'].cummax()
-    df_dd['Tu_DD'] = ((df_dd['Tu'] - df_dd['Tu_Max']) / df_dd['Tu_Max'].replace(0, pd.NA)) * 100
-    df_dd['Bench_DD'] = ((df_dd['Benchmark'] - df_dd['Bench_Max']) / df_dd['Bench_Max'].replace(0, pd.NA)) * 100
+    if {'Tu_Return', 'Benchmark_Return'}.issubset(df_dd.columns):
+        user_growth = (1.0 + pd.to_numeric(df_dd['Tu_Return'], errors='coerce').fillna(0.0)).cumprod()
+        bench_growth = (1.0 + pd.to_numeric(df_dd['Benchmark_Return'], errors='coerce').fillna(0.0)).cumprod()
+
+        user_max = user_growth.cummax().replace(0, pd.NA)
+        bench_max = bench_growth.cummax().replace(0, pd.NA)
+        df_dd['Tu_DD'] = ((user_growth - user_max) / user_max) * 100
+        df_dd['Bench_DD'] = ((bench_growth - bench_max) / bench_max) * 100
+    else:
+        df_dd['Tu_Max'] = df_dd['Tu'].cummax()
+        df_dd['Bench_Max'] = df_dd['Benchmark'].cummax()
+        df_dd['Tu_DD'] = ((df_dd['Tu'] - df_dd['Tu_Max']) / df_dd['Tu_Max'].replace(0, pd.NA)) * 100
+        df_dd['Bench_DD'] = ((df_dd['Benchmark'] - df_dd['Bench_Max']) / df_dd['Bench_Max'].replace(0, pd.NA)) * 100
+
     df_dd = df_dd.fillna(0)
 
     fig = go.Figure()

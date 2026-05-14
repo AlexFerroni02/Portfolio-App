@@ -7,6 +7,7 @@ from ui.benchmark_components import (
     render_benchmark_kpis,
     render_transaction_log,
     render_performance_chart,
+    render_gain_chart,
     render_drawdown_chart
 )
 
@@ -37,6 +38,7 @@ if bench_ticker:
             render_benchmark_kpis(df_chart, bench_ticker)
             render_transaction_log(df_log, bench_ticker)
             render_performance_chart(df_chart, bench_ticker)
+            render_gain_chart(df_chart, bench_ticker)
             render_drawdown_chart(df_chart)
             
         else:

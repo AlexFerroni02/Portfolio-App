@@ -12,6 +12,7 @@ def make_sidebar():
         st.page_link("pages/3_Benchmark.py", label="Benchmark", icon="⚖️")
         st.page_link("pages/4_Bilancio.py", label="Bilancio", icon="💰")
         st.page_link("pages/5_Ribilanciamento.py", label="Ribilancio", icon="🔄")
+        st.page_link("pages/6_Metriche_Portafoglio.py", label="Metriche", icon="📐")
         st.divider()
         st.caption(f"Portfolio Pro v1.2\n© {datetime.now().year}")
 

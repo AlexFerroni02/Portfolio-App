@@ -10,6 +10,19 @@ from services.portfolio_service import calculate_liquidity
 from typing import Any
 import json
 
+
+def _normalize_isin_code(isin: Any) -> str:
+    """
+    Normalizza un codice ISIN per confronti consistenti.
+
+    Args:
+        isin: Valore ISIN raw
+
+    Returns:
+        ISIN in uppercase senza spazi laterali
+    """
+    return str(isin).strip().upper()
+
 def parse_degiro_csv(file):
     df = pd.read_csv(file)
     cols = ['Quantità', 'Quotazione', 'Valore', 'Costi di transazione', 'Totale']
@@ -36,15 +49,20 @@ def process_new_transactions(file: Any, existing_transactions: pd.DataFrame) -> 
     existing_ids = set(existing_transactions['id']) if not existing_transactions.empty else set()
     
     for idx, r in ndf.iterrows():
-        if pd.isna(r.get('ISIN')): continue
-        tid = generate_id(r, idx)
+        isin = _normalize_isin_code(r.get('ISIN', ''))
+        if not isin:
+            continue
+
+        row_for_id = r.copy()
+        row_for_id['ISIN'] = isin
+        tid = generate_id(row_for_id, idx)
         if tid not in existing_ids:
             val = r.get('Totale', 0) if r.get('Totale', 0) != 0 else r.get('Valore', 0)
             rows_to_add.append({
                 'id': tid, 
                 'date': r['Data'], 
                 'product': r.get('Prodotto',''), 
-                'isin': r.get('ISIN',''), 
+                'isin': isin,
                 'quantity': r.get('Quantità',0), 
                 'local_value': val, 
                 'fees': r.get('Costi di transazione',0), 
@@ -495,6 +513,11 @@ def sync_prices(df_trans, df_map):
     if df_trans.empty or df_map.empty:
         return 0
 
+    df_trans = df_trans.copy()
+    df_map = df_map.copy()
+    df_trans['isin'] = df_trans['isin'].apply(_normalize_isin_code)
+    df_map['isin'] = df_map['isin'].apply(_normalize_isin_code)
+
     # 1. Identifica tutti gli ISIN con transazioni
     all_isins = df_trans['isin'].unique().tolist()
     holdings = df_trans.groupby('isin')['quantity'].sum()
@@ -569,7 +592,10 @@ def sync_prices(df_trans, df_map):
                     hist.columns = hist.columns.get_level_values(0)
                 
                 hist = hist[['Close']].reset_index()
-                hist.rename(columns={'Date': 'date', 'Close': 'close_price'}, inplace=True)
+                date_col = 'Date' if 'Date' in hist.columns else hist.columns[0]
+                hist.rename(columns={date_col: 'date', 'Close': 'close_price'}, inplace=True)
+                if 'date' not in hist.columns:
+                    continue
                 hist['mapping_id'] = m_id
                 hist['date'] = pd.to_datetime(hist['date']).dt.normalize() # Normalize subito
                 new_data.append(hist)

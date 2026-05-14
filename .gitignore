@@ -1,7 +1,8 @@
 /.streamlit/secrets.toml
+/.streamlit/*secrets*.toml
 credentials.json
 .venv/
 venv/
 # Cache e file compilati di Python
 __pycache__/
-*.pyc.streamlit/secrets*.toml
+*.pyc

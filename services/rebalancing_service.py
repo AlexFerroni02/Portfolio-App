@@ -1,6 +1,45 @@
 import pandas as pd
 import yfinance as yf
+import math
 from typing import Dict, List, Tuple, Optional
+
+PERCENT_TOLERANCE = 0.1
+
+
+def _safe_percentage_sum(percentages: Dict[str, float]) -> float:
+    """
+    Somma le percentuali ignorando valori non numerici o non finiti.
+
+    Args:
+        percentages: Dizionario di percentuali
+
+    Returns:
+        Somma numerica pulita
+    """
+    total = 0.0
+    for value in percentages.values():
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric_value):
+            total += numeric_value
+    return total
+
+
+def calculate_percentage_gap(percentages: Dict[str, float], target: float = 100.0) -> float:
+    """
+    Calcola la distanza da una somma target (default 100%).
+
+    Args:
+        percentages: Dizionario di percentuali
+        target: Valore target della somma
+
+    Returns:
+        Differenza target - somma (positiva se manca percentuale)
+    """
+    total = _safe_percentage_sum(percentages)
+    return round(target - total, 2)
 
 def validate_asset_class_allocation(asset_classes: Dict[str, float]) -> Tuple[bool, Optional[str]]:
     """
@@ -12,9 +51,10 @@ def validate_asset_class_allocation(asset_classes: Dict[str, float]) -> Tuple[bo
     Returns:
         Tuple (is_valid, error_message)
     """
-    total = sum(asset_classes.values())
-    if abs(total - 100) < 0.01:  # Tolleranza per errori di arrotondamento
+    gap = calculate_percentage_gap(asset_classes)
+    if abs(gap) <= PERCENT_TOLERANCE:
         return True, None
+    total = 100 - gap
     return False, f"La somma deve essere 100%, attualmente è {total:.1f}%"
 
 def validate_ticker_distribution(pct_inputs: Dict[str, float], category: str) -> Tuple[bool, Optional[str]]:
@@ -28,16 +68,16 @@ def validate_ticker_distribution(pct_inputs: Dict[str, float], category: str) ->
     Returns:
         Tuple (is_valid, error_message)
     """
-    total_pct = sum(pct_inputs.values())
-    if abs(total_pct - 100) < 0.01:
+    gap = calculate_percentage_gap(pct_inputs)
+    if abs(gap) <= PERCENT_TOLERANCE:
         return True, None
-    
-    if total_pct > 100:
-        over = total_pct - 100
+
+    if gap < 0:
+        over = abs(gap)
         return False, f"La somma delle percentuali per {category} supera 100% di {over:.1f}%."
-    else:
-        under = 100 - total_pct
-        return False, f"La somma delle percentuali per {category} è sotto 100% di {under:.1f}%."
+
+    under = gap
+    return False, f"La somma delle percentuali per {category} è sotto 100% di {under:.1f}%."
 
 def get_ticker_price(ticker: str) -> Optional[float]:
     """
@@ -77,8 +117,14 @@ def build_ticker_targets(
     """
     ticker_targets = {}
     for ticker, pct_ticker in global_pct_inputs.items():
-        cat = ticker_to_cat[ticker]
-        pct_cat = asset_classes[cat]
+        cat = ticker_to_cat.get(ticker)
+        if cat is None:
+            continue
+
+        pct_cat = asset_classes.get(cat, 0)
+        if pct_ticker <= 0 or pct_cat <= 0:
+            continue
+
         target_pct_total = (pct_cat / 100) * (pct_ticker / 100)
         ticker_targets[ticker] = target_pct_total * new_total
     return ticker_targets
@@ -115,8 +161,11 @@ def calculate_rebalancing_operations(
             current_val = row["mkt_val"]
         else:
             current_val = 0
-        
-        curr_price = global_ticker_prices[ticker]
+
+        curr_price = float(global_ticker_prices.get(ticker, 0) or 0)
+        if curr_price <= 0:
+            continue
+
         diff_eur = target_val - current_val
         
         # Solo se la differenza è significativa (> 1€)
@@ -125,7 +174,7 @@ def calculate_rebalancing_operations(
             n_quote = round(n_quote_float)  # Arrotonda a intero
             diff_eff = n_quote * curr_price
             operazione = "🟢 Compra" if n_quote > 0 else "🔴 Vendi"
-            cat = ticker_to_cat[ticker]
+            cat = ticker_to_cat.get(ticker, "N/D")
             
             dettagli.append({
                 "Ticker": ticker,

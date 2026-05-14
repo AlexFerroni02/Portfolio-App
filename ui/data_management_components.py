@@ -22,6 +22,24 @@ pd.set_option('future.no_silent_downcasting', True)
 CATEGORIE_ASSET = ["Azionario", "Obbligazionario", "Gold", "Liquidità"]
 
 
+def _format_allocation_value(value: object) -> str:
+    """Formatta valori di allocazione per visualizzazione tabellare."""
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(numeric_value) < 1e-12:
+        return '-'
+    return f"{numeric_value:.1f}%"
+
+
+def _format_allocation_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Formatta un DataFrame di allocazioni evitando API pandas deprecate/rimosse."""
+    if hasattr(df, "map"):
+        return df.map(_format_allocation_value)
+    return df.applymap(_format_allocation_value)
+
+
 # ============================================================
 # TAB TRANSAZIONI (3 sub-tab: Import CSV, Inserimento Manuale, Gestione)
 # ============================================================
@@ -99,7 +117,7 @@ def _render_manual_transaction_form():
         else:
             # Campi liberi per nuovo asset
             col_isin, col_prod = st.columns(2)
-            tx_isin = col_isin.text_input("ISIN", placeholder="es. IE00BKM4GZ66", key="manual_tx_isin").strip()
+            tx_isin = col_isin.text_input("ISIN", placeholder="es. IE00BKM4GZ66", key="manual_tx_isin").strip().upper()
             tx_product = col_prod.text_input("Nome Prodotto", placeholder="es. iShares MSCI EM", key="manual_tx_product").strip()
 
         # --- Quantità, Valore, Fees ---
@@ -148,7 +166,7 @@ def _render_manual_transaction_form():
                 st.success(f"✅ Transazione inserita! ({tx_type} di {tx_qty} {tx_product})")
 
                 # Controlla se l'ISIN necessita mappatura
-                mapped_isins = df_map['isin'].tolist() if not df_map.empty else []
+                mapped_isins = [str(isin).strip().upper() for isin in df_map['isin'].tolist()] if not df_map.empty else []
                 if tx_isin not in mapped_isins:
                     st.warning(f"⚠️ L'ISIN **{tx_isin}** non è ancora mappato. "
                                "Vai alla tab **🔗 Mappatura Ticker** per associarlo a un ticker Yahoo.")
@@ -365,6 +383,11 @@ def render_mapping_tab():
         # Rimuovi colonna Stato se presente
         if "Stato" in df_to_process.columns:
             df_to_process = df_to_process.drop(columns=["Stato"])
+
+        df_to_process['isin'] = df_to_process['isin'].astype(str).str.strip().str.upper()
+        df_to_process['ticker'] = df_to_process['ticker'].astype(str).str.strip().str.upper()
+        df_to_process['category'] = df_to_process['category'].astype(str).str.strip()
+
         df_to_process.dropna(subset=['isin'], inplace=True)
         df_to_process = df_to_process[df_to_process['isin'].str.strip() != '']
         # Rimuovi righe con ticker vuoto o NaN (non compilate)
@@ -376,8 +399,12 @@ def render_mapping_tab():
             cols_keep = [c for c in df_map_hidden.columns if c.lower() != 'id']
             df_to_process = pd.concat([df_to_process, df_map_hidden[cols_keep]], ignore_index=True)
             df_to_process.drop_duplicates(subset=['isin'], keep='first', inplace=True)
-        replace_all_mappings(df_to_process)
-        st.success("✅ Mappatura aggiornata con successo!")
+
+        save_ok = replace_all_mappings(df_to_process)
+        if save_ok:
+            st.success("✅ Mappatura aggiornata con successo!")
+        else:
+            st.error("❌ Salvataggio mappatura non riuscito. Controlla i dati e riprova.")
 
 def render_prices_tab():
     st.write("Scarica gli ultimi prezzi di chiusura da Yahoo Finance per **tutti gli asset mappati** (posseduti e venduti).")
@@ -660,7 +687,7 @@ def render_allocation_tab():
             df_geo_pivot = df_geo_pivot[ordered_cols]
 
             # Converti tutto a stringa per evitare problemi di tipo con PyArrow
-            df_geo_display = df_geo_pivot.applymap(lambda x: '-' if x == 0 else f"{x:.1f}%" if isinstance(x, (int, float)) else str(x))
+            df_geo_display = _format_allocation_dataframe(df_geo_pivot)
             st.dataframe(df_geo_display, width='stretch')
         else:
             st.info("Nessun dato geografico disponibile.")
@@ -688,7 +715,7 @@ def render_allocation_tab():
             df_sec_pivot = df_sec_pivot[ordered_cols]
 
             # Converti tutto a stringa per evitare problemi di tipo con PyArrow
-            df_sec_display = df_sec_pivot.applymap(lambda x: '-' if x == 0 else f"{x:.1f}%" if isinstance(x, (int, float)) else str(x))
+            df_sec_display = _format_allocation_dataframe(df_sec_pivot)
             st.dataframe(df_sec_display, width='stretch')
         else:
             st.info("Nessun dato settoriale disponibile.")

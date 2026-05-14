@@ -2,8 +2,44 @@ import streamlit as st
 import pandas as pd
 import json
 import unicodedata
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from typing import Optional, Dict, Any, Union
+
+
+def _normalize_isin_code(isin: Any) -> str:
+    """Normalizza un ISIN in uppercase senza spazi laterali."""
+    return str(isin).strip().upper()
+
+
+def _normalize_ticker_code(ticker: Any) -> str:
+    """Normalizza il ticker in uppercase senza spazi laterali."""
+    return str(ticker).strip().upper()
+
+
+def normalize_mapping_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pulisce e normalizza la tabella mapping prima di salvarla.
+
+    Args:
+        df: DataFrame mapping raw
+
+    Returns:
+        DataFrame normalizzato senza record invalidi
+    """
+    if df.empty:
+        return pd.DataFrame(columns=['isin', 'ticker', 'category', 'proxy_ticker'])
+
+    normalized_df = df.copy()
+    normalized_df['isin'] = normalized_df['isin'].apply(_normalize_isin_code)
+    normalized_df['ticker'] = normalized_df['ticker'].apply(_normalize_ticker_code)
+    normalized_df['category'] = normalized_df['category'].astype(str).str.strip()
+
+    normalized_df = normalized_df[normalized_df['isin'] != '']
+    normalized_df = normalized_df[normalized_df['ticker'] != '']
+    normalized_df = normalized_df[normalized_df['category'] != '']
+    normalized_df.drop_duplicates(subset=['isin'], keep='last', inplace=True)
+
+    return normalized_df.reset_index(drop=True)
 
 # --- CONNESSIONE AL DATABASE (NEON/POSTGRESQL) ---
 @st.cache_resource
@@ -64,6 +100,12 @@ def insert_single_mapping(isin: str, ticker: str, category: str, proxy_ticker: O
     Ritorna il mapping_id generato (SERIAL), o None in caso di errore/duplicato.
     NON tocca le righe esistenti.
     """
+    normalized_isin = _normalize_isin_code(isin)
+    normalized_ticker = _normalize_ticker_code(ticker)
+    normalized_category = str(category).strip()
+    if not normalized_isin or not normalized_ticker or not normalized_category:
+        return None
+
     conn = get_db_connection()
     try:
         with conn.session as s:
@@ -77,7 +119,12 @@ def insert_single_mapping(isin: str, ticker: str, category: str, proxy_ticker: O
                     "  proxy_ticker = EXCLUDED.proxy_ticker "
                     "RETURNING id"
                 ),
-                {'isin': isin, 'ticker': ticker, 'category': category, 'proxy': proxy_ticker},
+                {
+                    'isin': normalized_isin,
+                    'ticker': normalized_ticker,
+                    'category': normalized_category,
+                    'proxy': proxy_ticker,
+                },
             )
             row = result.fetchone()
             s.commit()
@@ -93,6 +140,9 @@ def insert_single_transaction(tx_dict: dict) -> bool:
     Inserisce una singola transazione con SQL diretto.
     Usa ON CONFLICT per evitare duplicati sull'id (TEXT PRIMARY KEY).
     """
+    tx_payload = tx_dict.copy()
+    tx_payload['isin'] = _normalize_isin_code(tx_payload.get('isin', ''))
+
     conn = get_db_connection()
     try:
         with conn.session as s:
@@ -102,7 +152,7 @@ def insert_single_transaction(tx_dict: dict) -> bool:
                     "VALUES (:id, :date, :product, :isin, :quantity, :local_value, :fees, :currency) "
                     "ON CONFLICT (id) DO NOTHING"
                 ),
-                tx_dict,
+                tx_payload,
             )
             s.commit()
         st.cache_data.clear()
@@ -165,24 +215,32 @@ def replace_all_mappings(df: pd.DataFrame) -> bool:
     """
     if df.empty:
         return False
+
+    normalized_df = normalize_mapping_dataframe(df)
+    if normalized_df.empty:
+        return False
+
     conn = get_db_connection()
     try:
         with conn.session as s:
             # 1. Raccogli gli ISIN nel nuovo DataFrame
-            new_isins = set(df['isin'].dropna().str.strip().tolist())
+            new_isins = set(normalized_df['isin'].tolist())
             new_isins.discard('')
 
             # 2. Elimina solo le righe il cui ISIN NON è più presente
             if new_isins:
+                delete_stmt = text("DELETE FROM mapping WHERE isin NOT IN :isins").bindparams(
+                    bindparam("isins", expanding=True)
+                )
                 s.execute(
-                    text("DELETE FROM mapping WHERE isin NOT IN :isins"),
-                    {'isins': tuple(new_isins)}
+                    delete_stmt,
+                    {'isins': sorted(new_isins)}
                 )
             else:
                 s.execute(text("DELETE FROM mapping"))
 
             # 3. UPSERT: inserisci nuovi o aggiorna ticker/category per esistenti
-            for _, row in df.iterrows():
+            for _, row in normalized_df.iterrows():
                 isin = str(row.get('isin', '')).strip()
                 if not isin:
                     continue
@@ -197,7 +255,7 @@ def replace_all_mappings(df: pd.DataFrame) -> bool:
                     ),
                     {
                         'isin': isin,
-                        'ticker': str(row.get('ticker', '')).strip(),
+                        'ticker': _normalize_ticker_code(row.get('ticker', '')),
                         'category': str(row.get('category', '')).strip(),
                         'proxy': row.get('proxy_ticker') if pd.notna(row.get('proxy_ticker')) else None,
                     },

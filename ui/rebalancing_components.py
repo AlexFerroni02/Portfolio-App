@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from typing import Dict, List
 from services.rebalancing_service import (
+    calculate_percentage_gap,
     validate_ticker_distribution,
     get_ticker_price
 )
@@ -67,7 +68,7 @@ def render_investment_amount_input(total_portfolio: float) -> tuple[float, float
 def render_ticker_distribution(
     assets_view: pd.DataFrame,
     asset_classes: Dict[str, float]
-) -> tuple[Dict[str, float], Dict[str, float], Dict[str, str]]:
+) -> tuple[Dict[str, float], Dict[str, float], Dict[str, str], Dict[str, str]]:
     """
     Renderizza gli expander per distribuire le percentuali tra i ticker di ogni categoria.
     
@@ -76,13 +77,14 @@ def render_ticker_distribution(
         asset_classes: Dizionario {categoria: percentuale}
     
     Returns:
-        Tuple (global_pct_inputs, global_ticker_prices, ticker_to_cat)
+        Tuple (global_pct_inputs, global_ticker_prices, ticker_to_cat, invalid_categories)
     """
     st.header("2️⃣ Distribuisci all'interno di ogni Asset Class")
     
     global_pct_inputs = {}
     global_ticker_prices = {}
     ticker_to_cat = {}
+    invalid_categories = {}
     
     for cat, pct_cat in asset_classes.items():
         if pct_cat > 0:
@@ -97,6 +99,7 @@ def render_ticker_distribution(
                 
                 # Inizializza session_state per questa categoria
                 _initialize_category_session_state(cat, tickers_cat)
+                _sync_category_session_state(cat, tickers_cat)
                 
                 pct_inputs = st.session_state[f"pct_inputs_{cat}"]
                 ticker_prices = st.session_state[f"ticker_prices_{cat}"]
@@ -107,10 +110,15 @@ def render_ticker_distribution(
                 
                 # Sezione per aggiungere nuovi ticker
                 _render_add_ticker_section(cat, pct_inputs, ticker_prices, new_tickers)
+
+                # Mostra quanto manca/sfora per arrivare al 100%
+                gap = calculate_percentage_gap(pct_inputs)
+                _render_distribution_gap(cat, gap)
                 
                 # Valida la distribuzione
                 is_valid, error_msg = validate_ticker_distribution(pct_inputs, cat)
                 if not is_valid:
+                    invalid_categories[cat] = error_msg
                     st.error(f"❌ {error_msg}")
                     continue
                 else:
@@ -122,22 +130,98 @@ def render_ticker_distribution(
                     global_ticker_prices[ticker] = ticker_prices[ticker]
                     ticker_to_cat[ticker] = cat
     
-    return global_pct_inputs, global_ticker_prices, ticker_to_cat
+    return global_pct_inputs, global_ticker_prices, ticker_to_cat, invalid_categories
+
+
+def _normalize_ticker_code(ticker: str) -> str:
+    """Normalizza il ticker per evitare duplicati dovuti a maiuscole/spazi."""
+    return str(ticker).strip().upper()
+
+
+def _render_distribution_gap(category: str, gap: float):
+    """Mostra lo scostamento dal 100% per una categoria."""
+    if abs(gap) <= 0.1:
+        st.caption(f"✅ {category}: somma allineata al 100%")
+        return
+
+    if gap > 0:
+        st.caption(f"⚠️ {category}: mancano {gap:.2f}% per arrivare al 100%")
+        return
+
+    st.caption(f"⚠️ {category}: superi il 100% di {abs(gap):.2f}%")
 
 def _initialize_category_session_state(cat: str, tickers_cat: pd.DataFrame):
     """Inizializza lo stato della sessione per una categoria."""
+    tickers = [_normalize_ticker_code(t) for t in tickers_cat["ticker"].dropna().tolist()]
+    default_pct = 100.0 / len(tickers) if tickers else 0.0
+    ticker_prices = {
+        _normalize_ticker_code(row["ticker"]): float(row.get("curr_price", 0) or 0)
+        for _, row in tickers_cat.iterrows()
+    }
+
     if f"pct_inputs_{cat}" not in st.session_state:
         st.session_state[f"pct_inputs_{cat}"] = {
-            row["ticker"]: 100.0 / len(tickers_cat) 
-            for _, row in tickers_cat.iterrows()
+            ticker: default_pct for ticker in tickers
         }
     if f"ticker_prices_{cat}" not in st.session_state:
-        st.session_state[f"ticker_prices_{cat}"] = {
-            row["ticker"]: row["curr_price"] 
-            for _, row in tickers_cat.iterrows()
-        }
+        st.session_state[f"ticker_prices_{cat}"] = ticker_prices
     if f"new_tickers_{cat}" not in st.session_state:
         st.session_state[f"new_tickers_{cat}"] = []
+
+
+def _sync_category_session_state(cat: str, tickers_cat: pd.DataFrame):
+    """Mantiene coerente lo stato sessione con ticker correnti e ticker aggiunti."""
+    pct_key = f"pct_inputs_{cat}"
+    price_key = f"ticker_prices_{cat}"
+    new_key = f"new_tickers_{cat}"
+
+    pct_inputs = st.session_state.get(pct_key, {})
+    ticker_prices = st.session_state.get(price_key, {})
+    new_tickers = st.session_state.get(new_key, [])
+
+    existing_prices = {
+        _normalize_ticker_code(row["ticker"]): float(row.get("curr_price", 0) or 0)
+        for _, row in tickers_cat.iterrows()
+    }
+    existing_tickers = set(existing_prices.keys())
+
+    normalized_new_tickers = [_normalize_ticker_code(t) for t in new_tickers]
+    normalized_new_tickers = [t for t in normalized_new_tickers if t and t not in existing_tickers]
+    valid_tickers = existing_tickers | set(normalized_new_tickers)
+
+    normalized_pct_inputs = {}
+    for ticker, value in pct_inputs.items():
+        normalized_ticker = _normalize_ticker_code(ticker)
+        if normalized_ticker not in valid_tickers:
+            continue
+        try:
+            normalized_pct_inputs[normalized_ticker] = float(value)
+        except (TypeError, ValueError):
+            normalized_pct_inputs[normalized_ticker] = 0.0
+
+    normalized_ticker_prices = {}
+    for ticker, value in ticker_prices.items():
+        normalized_ticker = _normalize_ticker_code(ticker)
+        if normalized_ticker not in valid_tickers:
+            continue
+        try:
+            normalized_ticker_prices[normalized_ticker] = float(value)
+        except (TypeError, ValueError):
+            normalized_ticker_prices[normalized_ticker] = 0.0
+
+    pct_inputs = normalized_pct_inputs
+    ticker_prices = normalized_ticker_prices
+
+    for ticker, price in existing_prices.items():
+        pct_inputs.setdefault(ticker, 0.0)
+        ticker_prices[ticker] = price
+    for ticker in normalized_new_tickers:
+        pct_inputs.setdefault(ticker, 0.0)
+        ticker_prices.setdefault(ticker, 0.0)
+
+    st.session_state[pct_key] = pct_inputs
+    st.session_state[price_key] = ticker_prices
+    st.session_state[new_key] = normalized_new_tickers
 
 def _render_existing_tickers(
     cat: str,
@@ -148,6 +232,10 @@ def _render_existing_tickers(
 ):
     """Renderizza i ticker esistenti con i loro input."""
     st.caption(f"Distribuisci il 100% della categoria {cat} tra i seguenti ticker:")
+    owned_tickers = {
+        _normalize_ticker_code(ticker)
+        for ticker in assets_view["ticker"].dropna().tolist()
+    }
     
     for ticker in list(pct_inputs.keys()):
         col_t, col_p, col_r = st.columns([2, 1, 1])
@@ -171,7 +259,7 @@ def _render_existing_tickers(
         
         with col_r:
             # Permetti rimozione solo per ticker non presenti nel portafoglio
-            if ticker not in assets_view['ticker'].values:
+            if ticker not in owned_tickers:
                 if st.button(f"Rimuovi {ticker}", key=f"remove_{cat}_{ticker}"):
                     del pct_inputs[ticker]
                     del ticker_prices[ticker]
@@ -193,11 +281,12 @@ def _render_add_ticker_section(
     col_add_t, col_add_b = st.columns([3, 1])
     
     with col_add_t:
-        new_ticker = st.text_input(
+        new_ticker_raw = st.text_input(
             f"Nuovo Ticker", 
             key=f"new_ticker_input_{cat}", 
             placeholder="Es: AAPL"
         )
+        new_ticker = _normalize_ticker_code(new_ticker_raw)
     
     with col_add_b:
         if st.button(f"Aggiungi", key=f"add_{cat}"):
@@ -213,6 +302,7 @@ def _render_add_ticker_section(
                             st.session_state[f"pct_inputs_{cat}"] = pct_inputs
                             st.session_state[f"ticker_prices_{cat}"] = ticker_prices
                             st.session_state[f"new_tickers_{cat}"] = new_tickers
+                            st.session_state[f"new_ticker_input_{cat}"] = ""
                             st.success(f"Aggiunto {new_ticker} con 0% - Prezzo: €{new_price:.2f}")
                             st.rerun()
                         else:

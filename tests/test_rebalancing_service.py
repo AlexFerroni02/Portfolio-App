@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
 from services.rebalancing_service import (
+    calculate_percentage_gap,
     validate_asset_class_allocation,
     validate_ticker_distribution,
     get_ticker_price,
@@ -13,6 +14,18 @@ from services.rebalancing_service import (
 
 class TestValidation:
     """Test per le funzioni di validazione."""
+
+    def test_calculate_percentage_gap(self):
+        """Test del calcolo gap rispetto al 100%."""
+        gap = calculate_percentage_gap({"A": 40, "B": 30, "C": 20})
+        assert gap == 10.0
+
+    def test_validate_ticker_distribution_allows_small_rounding_gap(self):
+        """Gap minimo entro tolleranza deve essere considerato valido."""
+        pct_inputs = {"AAPL": 33.3, "GOOGL": 33.3, "MSFT": 33.35}
+        is_valid, error_msg = validate_ticker_distribution(pct_inputs, "Azionario")
+        assert is_valid is True
+        assert error_msg is None
     
     def test_validate_asset_class_allocation_valid(self):
         """Test con allocazione valida al 100%."""

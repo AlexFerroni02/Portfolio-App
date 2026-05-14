@@ -1,8 +1,9 @@
 import pandas as pd
+from io import StringIO
 from datetime import datetime
 from unittest.mock import MagicMock, ANY
 
-from services.data_service import sync_prices
+from services.data_service import sync_prices, process_new_transactions
 
 def test_sync_prices_handles_duplicates_and_replaces(mocker):
     """
@@ -101,3 +102,17 @@ def test_sync_prices_no_new_data(mocker):
         saved_df = call_args[0]
         df_filtered = saved_df[saved_df['mapping_id'] == 1]
         assert len(df_filtered) == 1, f"Expected 1 row for mapping_id=1, got {len(df_filtered)}"
+
+
+def test_process_new_transactions_normalizes_isin_codes():
+    """ISIN importati da CSV devono essere normalizzati in uppercase senza spazi."""
+    csv_content = (
+        "Data,ISIN,Prodotto,Quantità,Valore,Costi di transazione,Totale\n"
+        "19-12-2025, ie00abc12345 ,ETF Test,1,100,1,101\n"
+    )
+    csv_file = StringIO(csv_content)
+
+    result_df = process_new_transactions(csv_file, pd.DataFrame())
+
+    assert not result_df.empty
+    assert result_df.iloc[0]['isin'] == 'IE00ABC12345'
