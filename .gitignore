@@ -6,3 +6,6 @@ venv/
 # Cache e file compilati di Python
 __pycache__/
 *.pyc
+.coverage
+.pytest_cache/
+htmlcov/
