@@ -7,7 +7,8 @@ from ui.data_management_components import (
     render_prices_tab,
     render_budget_tab,
     render_allocation_tab,
-    render_net_worth_tab
+    render_net_worth_tab,
+    render_budget_categories_tab
 )
 
 st.set_page_config(page_title="Gestione Dati", page_icon="📂", layout="wide")
@@ -25,11 +26,12 @@ df_budget_check = get_data("budget")
 initial_balance_exists = not df_budget_check.empty and not df_budget_check[df_budget_check['category'] == 'Saldo Iniziale'].empty
 
 # Definizione dei Tab
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📥 Transazioni", 
     "🔗 Mappatura Ticker", 
     "🔄 Aggiorna Prezzi", 
-    "💸 Movimenti Bilancio", 
+    "💸 Movimenti Bilancio",
+    "🏷️ Categorie Budget",
     "🔬 Allocazione Asset (X-Ray)", 
     "🎯 Patrimonio Netto"
 ])
@@ -47,7 +49,10 @@ with tab4:
     render_budget_tab(initial_balance_exists)
 
 with tab5:
-    render_allocation_tab()
+    render_budget_categories_tab()
 
 with tab6:
+    render_allocation_tab()
+
+with tab7:
     render_net_worth_tab()

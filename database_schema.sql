@@ -92,6 +92,54 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- 8. BUDGET_CATEGORIES - Categorie personalizzabili per il bilancio
+-- L'utente può aggiungere/rimuovere categorie; quelle di sistema sono protette
+CREATE TABLE IF NOT EXISTS budget_categories (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('Entrata', 'Uscita', 'Entrambi')),
+    budget_group TEXT CHECK (budget_group IN ('necessita', 'desideri', 'risparmio') OR budget_group IS NULL),
+    is_system BOOLEAN DEFAULT FALSE,
+    sort_order INTEGER DEFAULT 0,
+    UNIQUE (name, type)
+);
+
+-- Indice per query frequenti su tipo
+CREATE INDEX IF NOT EXISTS idx_budget_categories_type ON budget_categories(type);
+
+-- ========================================================
+-- SEED: Categorie di default
+-- ========================================================
+
+-- Categorie di sistema (protette, non eliminabili)
+INSERT INTO budget_categories (name, type, budget_group, is_system, sort_order) VALUES
+    ('Saldo Iniziale', 'Entrata', NULL, TRUE, 0),
+    ('Investimento', 'Uscita', 'risparmio', TRUE, 0),
+    ('Aggiustamento Liquidità', 'Entrambi', NULL, TRUE, 0)
+ON CONFLICT (name, type) DO NOTHING;
+
+-- Categorie entrate di default
+INSERT INTO budget_categories (name, type, budget_group, is_system, sort_order) VALUES
+    ('Stipendio', 'Entrata', NULL, FALSE, 1),
+    ('Bonus', 'Entrata', NULL, FALSE, 2),
+    ('Regali', 'Entrata', NULL, FALSE, 3),
+    ('Dividendi', 'Entrata', NULL, FALSE, 4),
+    ('Rimborso', 'Entrata', NULL, FALSE, 5),
+    ('Altro', 'Entrambi', NULL, FALSE, 99)
+ON CONFLICT (name, type) DO NOTHING;
+
+-- Categorie uscite di default (con classificazione 50/30/20)
+INSERT INTO budget_categories (name, type, budget_group, is_system, sort_order) VALUES
+    ('Affitto/Casa', 'Uscita', 'necessita', FALSE, 1),
+    ('Spesa Alimentare', 'Uscita', 'necessita', FALSE, 2),
+    ('Trasporti', 'Uscita', 'necessita', FALSE, 3),
+    ('Bollette', 'Uscita', 'necessita', FALSE, 4),
+    ('Salute', 'Uscita', 'necessita', FALSE, 5),
+    ('Ristoranti/Svago', 'Uscita', 'desideri', FALSE, 6),
+    ('Shopping', 'Uscita', 'desideri', FALSE, 7),
+    ('Viaggi', 'Uscita', 'desideri', FALSE, 8)
+ON CONFLICT (name, type) DO NOTHING;
+
 -- ========================================================
 -- NOTE IMPORTANTI:
 -- ========================================================
@@ -100,17 +148,27 @@ CREATE TABLE IF NOT EXISTS settings (
 --   • transactions.isin → mapping.isin (join nel codice, no FK strict per flessibilità import)
 --   • prices.mapping_id → mapping.id (FK con CASCADE)
 --   • asset_allocation.mapping_id → mapping.id (FK con CASCADE, UNIQUE)
+--   • budget.category → budget_categories.name (join nel codice, no FK strict per retrocompatibilità)
 --
 -- COLONNE CALCOLATE A RUNTIME (non salvate nel DB):
 --   • budget.mese_anno → calcolato come df['date'].dt.strftime('%Y-%m')
+--   • Liquidità → calcolata da Saldo Iniziale + Entrate - Uscite - Investimenti
 --
 -- FORMATO JSON:
 --   • geography_json: {"italia": 30.5, "usa": 25.0, "altri": 44.5}
 --   • sector_json: {"tecnologia": 40.0, "finanza": 30.0, "altro": 30.0}
 --
--- CATEGORIE VALIDE (budget):
---   Entrate: Stipendio, Bonus, Regali, Dividendi, Rimborso, Altro, Aggiustamento Liquidità, Saldo Iniziale
---   Uscite: Affitto/Casa, Spesa Alimentare, Ristoranti/Svago, Trasporti, Viaggi, Salute, Shopping, 
---           Bollette, Altro, Aggiustamento Liquidità, Investimento
+-- CATEGORIE BUDGET:
+--   Le categorie sono ora dinamiche e gestite dalla tabella budget_categories.
+--   Tre categorie di sistema sono protette (is_system=TRUE):
+--     • Saldo Iniziale (Entrata) - punto di partenza liquidità
+--     • Investimento (Uscita) - ponte tra budget e portafoglio
+--     • Aggiustamento Liquidità (Entrambi) - correzione manuale
+--
+-- GRUPPI REGOLA 50/30/20 (budget_group):
+--   • 'necessita' → spese necessarie (obiettivo ≤ 50% entrate)
+--   • 'desideri'  → spese discrezionali (obiettivo ≤ 30% entrate)
+--   • 'risparmio' → risparmio/investimento (obiettivo ≥ 20% entrate)
+--   • NULL        → non classificata (esclusa dal calcolo 50/30/20)
 --
 -- ========================================================
