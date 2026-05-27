@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from database.connection import save_data
-from services.budget_service import calculate_net_worth_trend
+from services.budget_service import calculate_net_worth_trend, get_budget_group_categories
 from ui.components import style_chart_for_mobile
 
 def render_month_selector(df_budget: pd.DataFrame) -> str:
@@ -267,9 +267,9 @@ def render_budget_rule_check(df_budget: pd.DataFrame, selected_month: str):
     """Verifica la regola 50/30/20: 50% necessità, 30% desideri, 20% risparmio+investimento."""
     st.subheader("🎯 Verifica Regola 50/30/20")
     
-    # Categorie classificate
-    NECESSITA = ["Affitto/Casa", "Spesa Alimentare", "Trasporti", "Bollette", "Salute"]
-    DESIDERI = ["Ristoranti/Svago", "Shopping", "Viaggi"]
+    # Categorie classificate (dinamiche dal DB)
+    NECESSITA = get_budget_group_categories('necessita')
+    DESIDERI = get_budget_group_categories('desideri')
     
     df_month = df_budget[df_budget['date'].dt.strftime('%Y-%m') == selected_month].copy()
     
@@ -629,9 +629,9 @@ def render_general_50_30_20(df_budget: pd.DataFrame):
         st.info("Nessun dato disponibile.")
         return
     
-    # Categorie di necessità e desideri (stesse del check mensile)
-    NECESSITA = ['Affitto/Casa', 'Spesa Alimentare', 'Trasporti', 'Bollette', 'Salute']
-    DESIDERI = ['Ristoranti/Svago', 'Viaggi', 'Shopping', 'Altro']
+    # Categorie di necessità e desideri (dinamiche dal DB)
+    NECESSITA = get_budget_group_categories('necessita')
+    DESIDERI = get_budget_group_categories('desideri')
     
     entrate = df_budget[df_budget['type'] == 'Entrata']['amount'].sum()
     
@@ -660,7 +660,6 @@ def render_general_50_30_20(df_budget: pd.DataFrame):
     
     with c1:
         delta_n = pct_necessita - 50
-        color = "normal" if pct_necessita <= 50 else "inverse"
         st.metric(
             "🏠 Necessità",
             f"{pct_necessita:.1f}%",
@@ -708,7 +707,7 @@ def render_general_50_30_20(df_budget: pd.DataFrame):
     st.plotly_chart(style_chart_for_mobile(fig), use_container_width=True)
     
     # Valutazione complessiva
-    status = []
+    status: list[str] = []
     if pct_necessita <= 55:
         status.append("✅ Necessità sotto controllo")
     else:

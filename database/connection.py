@@ -4,7 +4,14 @@ import json
 import unicodedata
 import time
 from sqlalchemy import text, bindparam
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, List, Union
+
+# Whitelist tabelle valide per prevenire SQL injection
+ALLOWED_TABLES = frozenset({
+    "transactions", "mapping", "prices", "budget",
+    "asset_allocation", "networth_history", "settings",
+    "budget_categories"
+})
 
 
 def _normalize_isin_code(isin: Any) -> str:
@@ -53,6 +60,8 @@ def get_db_connection():
 
 def _read_table_uncached(table_name: str) -> pd.DataFrame:
     """Legge una tabella dal DB senza cache applicativa."""
+    if table_name not in ALLOWED_TABLES:
+        raise ValueError(f"Tabella non consentita: {table_name}")
     conn = get_db_connection()
     # ttl=0 forza sempre una query fresca lato Streamlit connection cache.
     df = conn.query(f'SELECT * FROM "{table_name}";', ttl=0)
@@ -93,6 +102,8 @@ def save_data(df: pd.DataFrame, table_name: str, method: str = 'replace') -> Non
         table_name: Nome della tabella target.
         method: 'replace' o 'append'. Default 'replace'.
     """
+    if table_name not in ALLOWED_TABLES:
+        raise ValueError(f"Tabella non consentita: {table_name}")
     if df.empty:
         return
 
@@ -367,3 +378,217 @@ def save_allocation_json(mapping_id: int, geo_dict: Dict[str, float], sec_dict: 
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Errore salvataggio JSON per mapping_id={mapping_id}: {e}")
+
+
+# --- CRUD BUDGET CATEGORIES ---
+
+def get_budget_categories(type_filter: Optional[str] = None) -> pd.DataFrame:
+    """
+    Legge le categorie budget dal DB, opzionalmente filtrate per tipo.
+    
+    Args:
+        type_filter: 'Entrata', 'Uscita' o None (tutte)
+    
+    Returns:
+        DataFrame con colonne: id, name, type, budget_group, is_system, sort_order
+    """
+    conn = get_db_connection()
+    try:
+        if type_filter:
+            df = conn.query(
+                "SELECT * FROM budget_categories "
+                "WHERE type = :t OR type = 'Entrambi' "
+                "ORDER BY sort_order, name",
+                params={'t': type_filter},
+                ttl=0
+            )
+        else:
+            df = conn.query(
+                "SELECT * FROM budget_categories ORDER BY sort_order, name",
+                ttl=0
+            )
+        return df if not df.empty else pd.DataFrame(
+            columns=['id', 'name', 'type', 'budget_group', 'is_system', 'sort_order']
+        )
+    except Exception:
+        return pd.DataFrame(
+            columns=['id', 'name', 'type', 'budget_group', 'is_system', 'sort_order']
+        )
+
+
+def get_categories_by_group(budget_group: str) -> List[str]:
+    """
+    Restituisce i nomi delle categorie che appartengono a un dato gruppo (necessita/desideri/risparmio).
+    """
+    conn = get_db_connection()
+    try:
+        df = conn.query(
+            "SELECT name FROM budget_categories WHERE budget_group = :bg",
+            params={'bg': budget_group},
+            ttl=0
+        )
+        return df['name'].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def insert_budget_category(
+    name: str,
+    cat_type: str,
+    budget_group: Optional[str] = None,
+    sort_order: int = 50
+) -> Optional[int]:
+    """
+    Inserisce una nuova categoria budget.
+    Ritorna l'ID generato o None in caso di errore/duplicato.
+    """
+    name = name.strip()
+    if not name or cat_type not in ('Entrata', 'Uscita', 'Entrambi'):
+        return None
+    if budget_group and budget_group not in ('necessita', 'desideri', 'risparmio'):
+        return None
+
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            result = s.execute(
+                text(
+                    "INSERT INTO budget_categories (name, type, budget_group, is_system, sort_order) "
+                    "VALUES (:name, :type, :bg, FALSE, :so) "
+                    "ON CONFLICT (name, type) DO NOTHING "
+                    "RETURNING id"
+                ),
+                {'name': name, 'type': cat_type, 'bg': budget_group, 'so': sort_order}
+            )
+            row = result.fetchone()
+            s.commit()
+        st.cache_data.clear()
+        return row[0] if row else None
+    except Exception as e:
+        st.error(f"Errore inserimento categoria: {e}")
+        return None
+
+
+def update_budget_category(
+    category_id: int,
+    name: Optional[str] = None,
+    budget_group: Optional[str] = "__UNCHANGED__",
+    sort_order: Optional[int] = None
+) -> bool:
+    """
+    Aggiorna una categoria budget (solo se non è di sistema per il nome).
+    budget_group='__UNCHANGED__' significa non modificare; None significa impostare a NULL.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            # Verifica che non sia di sistema
+            check = s.execute(
+                text("SELECT is_system FROM budget_categories WHERE id = :id"),
+                {'id': category_id}
+            ).fetchone()
+            if not check:
+                return False
+
+            updates = []
+            params = {'id': category_id}
+
+            if name is not None and not check[0]:  # Non rinominare categorie di sistema
+                updates.append("name = :name")
+                params['name'] = name.strip()
+
+            if budget_group != "__UNCHANGED__":
+                if budget_group and budget_group not in ('necessita', 'desideri', 'risparmio'):
+                    return False
+                updates.append("budget_group = :bg")
+                params['bg'] = budget_group
+
+            if sort_order is not None:
+                updates.append("sort_order = :so")
+                params['so'] = sort_order
+
+            if not updates:
+                return False
+
+            s.execute(
+                text(f"UPDATE budget_categories SET {', '.join(updates)} WHERE id = :id"),
+                params
+            )
+            s.commit()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Errore aggiornamento categoria: {e}")
+        return False
+
+
+def delete_budget_category(category_id: int) -> bool:
+    """
+    Elimina una categoria budget. Le categorie di sistema (is_system=TRUE) non possono essere eliminate.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.session as s:
+            result = s.execute(
+                text(
+                    "DELETE FROM budget_categories "
+                    "WHERE id = :id AND is_system = FALSE"
+                ),
+                {'id': category_id}
+            )
+            s.commit()
+        st.cache_data.clear()
+        return result.rowcount > 0
+    except Exception as e:
+        st.error(f"Errore eliminazione categoria: {e}")
+        return False
+
+
+def seed_default_categories() -> None:
+    """
+    Inserisce le categorie di default se la tabella è vuota.
+    Chiamata al primo avvio dell'app.
+    """
+    conn = get_db_connection()
+    try:
+        df = conn.query("SELECT COUNT(*) as cnt FROM budget_categories", ttl=0)
+        if df.iloc[0]['cnt'] > 0:
+            return  # Categorie già presenti
+
+        defaults = [
+            # Sistema
+            ('Saldo Iniziale', 'Entrata', None, True, 0),
+            ('Investimento', 'Uscita', 'risparmio', True, 0),
+            ('Aggiustamento Liquidità', 'Entrambi', None, True, 0),
+            # Entrate
+            ('Stipendio', 'Entrata', None, False, 1),
+            ('Bonus', 'Entrata', None, False, 2),
+            ('Regali', 'Entrata', None, False, 3),
+            ('Dividendi', 'Entrata', None, False, 4),
+            ('Rimborso', 'Entrata', None, False, 5),
+            ('Altro', 'Entrambi', None, False, 99),
+            # Uscite
+            ('Affitto/Casa', 'Uscita', 'necessita', False, 1),
+            ('Spesa Alimentare', 'Uscita', 'necessita', False, 2),
+            ('Trasporti', 'Uscita', 'necessita', False, 3),
+            ('Bollette', 'Uscita', 'necessita', False, 4),
+            ('Salute', 'Uscita', 'necessita', False, 5),
+            ('Ristoranti/Svago', 'Uscita', 'desideri', False, 6),
+            ('Shopping', 'Uscita', 'desideri', False, 7),
+            ('Viaggi', 'Uscita', 'desideri', False, 8),
+        ]
+
+        with conn.session as s:
+            for name, cat_type, bg, is_sys, so in defaults:
+                s.execute(
+                    text(
+                        "INSERT INTO budget_categories (name, type, budget_group, is_system, sort_order) "
+                        "VALUES (:name, :type, :bg, :is_sys, :so) "
+                        "ON CONFLICT (name, type) DO NOTHING"
+                    ),
+                    {'name': name, 'type': cat_type, 'bg': bg, 'is_sys': is_sys, 'so': so}
+                )
+            s.commit()
+        st.cache_data.clear()
+    except Exception:
+        pass  # Se la tabella non esiste ancora, il seed viene saltato silenziosamente

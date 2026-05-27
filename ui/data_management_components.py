@@ -7,13 +7,19 @@ from datetime import date, datetime
 from database.connection import (
     get_data, save_data, save_allocation_json, replace_all_mappings,
     insert_single_transaction, update_transaction, delete_transactions,
-    get_db_connection
+    get_db_connection, get_budget_categories,
+    insert_budget_category, update_budget_category, delete_budget_category,
+    seed_default_categories
 )
 from services.data_service import (
     process_new_transactions, 
     calculate_net_worth_snapshot,
     sync_prices,
     fetch_justetf_allocation_robust
+)
+from services.budget_service import (
+    get_categories_for_type,
+    get_all_category_names,
 )
 
 # Disabilita warning pandas per downcasting
@@ -464,15 +470,15 @@ def render_prices_tab():
 
 def render_budget_tab(initial_balance_exists: bool):
     st.header("➕ Inserimento Rapido Movimenti")
-    CATEGORIE_ENTRATE_BASE = ["Stipendio", "Bonus", "Regali", "Dividendi", "Rimborso", "Altro", "Aggiustamento Liquidità"]
-    CATEGORIE_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro", "Aggiustamento Liquidità", "Investimento"]
-    ALL_CATEGORIES = sorted(list(set(CATEGORIE_ENTRATE_BASE + CATEGORIE_USCITE + ["Saldo Iniziale"])))
+
+    # Categorie dinamiche dal DB (con fallback hardcoded)
+    active_entrate = get_categories_for_type("Entrata", initial_balance_exists)
+    active_uscite = get_categories_for_type("Uscita", initial_balance_exists)
+    ALL_CATEGORIES = get_all_category_names()
     
     if not initial_balance_exists:
-        CATEGORIE_ENTRATE = ["Saldo Iniziale"] + CATEGORIE_ENTRATE_BASE
         st.warning("**Imposta il tuo Saldo Iniziale!** Questo è il primo passo fondamentale.", icon="🎯")
     else:
-        CATEGORIE_ENTRATE = CATEGORIE_ENTRATE_BASE
         st.success("✅ Hai già inserito un 'Saldo Iniziale'.", icon="👍")
     
     st.info("💡 Inserisci solo gli importi > 0, gli altri verranno ignorati automaticamente.")
@@ -481,7 +487,7 @@ def render_budget_tab(initial_balance_exists: bool):
     selected_date = col_date.date_input("📅 Data", date.today(), key="batch_date")
     f_type = col_type.radio("📌 Tipo:", ["Uscita", "Entrata"], horizontal=True, key="budget_type_radio")
     
-    active_categories = CATEGORIE_USCITE if f_type == "Uscita" else CATEGORIE_ENTRATE
+    active_categories = active_uscite if f_type == "Uscita" else active_entrate
     
     with st.form("batch_form", clear_on_submit=True):
         st.subheader("🔴 Inserisci Uscite" if f_type == "Uscita" else "🟢 Inserisci Entrate")
@@ -923,3 +929,117 @@ def render_net_worth_tab():
         df_final = df_final[df_final['net_worth'].notna() | (df_final['goal'].notna() & future_goals)]
         save_data(df_final, "networth_history", method='replace')
         st.success("Obiettivi salvati e propagati!"); st.rerun()
+
+
+def render_budget_categories_tab():
+    """Tab per gestire le categorie di budget personalizzabili."""
+    st.subheader("🏷️ Gestione Categorie Budget")
+    st.caption("Aggiungi, modifica o rimuovi le categorie per entrate e uscite. Le categorie di sistema (🔒) non possono essere eliminate.")
+
+    # Assicura che le categorie di default esistano
+    seed_default_categories()
+
+    # --- 1. TABELLA CATEGORIE ESISTENTI ---
+    df_cats = get_budget_categories()
+
+    if df_cats.empty:
+        st.info("Nessuna categoria trovata. Aggiungi la prima qui sotto.")
+    else:
+        # Prepara la tabella per la visualizzazione
+        df_display = df_cats.copy()
+        df_display['🔒'] = df_display['is_system'].apply(lambda x: '🔒' if x else '')
+        
+        # Mappa i gruppi per visualizzazione
+        group_labels = {
+            'necessita': '🏠 Necessità',
+            'desideri': '🎉 Desideri',
+            'risparmio': '📈 Risparmio/Investimento',
+            None: '—'
+        }
+        df_display['Gruppo 50/30/20'] = df_display['budget_group'].map(
+            lambda x: group_labels.get(x, '—')
+        )
+        
+        # Mostra per sezione
+        for section_type in ['Entrata', 'Uscita', 'Entrambi']:
+            section_cats = df_display[df_display['type'] == section_type]
+            if section_cats.empty:
+                continue
+            
+            emoji = '🟢' if section_type == 'Entrata' else '🔴' if section_type == 'Uscita' else '🔄'
+            st.markdown(f"#### {emoji} {section_type}")
+            
+            for _, row in section_cats.iterrows():
+                col_lock, col_name, col_group, col_actions = st.columns([0.5, 3, 3, 2])
+                
+                with col_lock:
+                    st.markdown(row['🔒'] if row['🔒'] else '&nbsp;', unsafe_allow_html=True)
+                
+                with col_name:
+                    st.markdown(f"**{row['name']}**")
+                
+                with col_group:
+                    if row['type'] in ('Uscita', 'Entrambi') and not row['is_system']:
+                        raw_group = row.get('budget_group')
+                        current_group = None if pd.isna(raw_group) else raw_group
+                        group_options = [None, 'necessita', 'desideri', 'risparmio']
+                        group_display = ['— Nessuno', '🏠 Necessità', '🎉 Desideri', '📈 Risparmio']
+                        current_idx = group_options.index(current_group) if current_group in group_options else 0
+                        
+                        new_group = st.selectbox(
+                            "Gruppo",
+                            options=group_options,
+                            format_func=lambda x: group_display[group_options.index(x)],
+                            index=current_idx,
+                            key=f"cat_group_{row['id']}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        if new_group != current_group:
+                            update_budget_category(int(row['id']), budget_group=new_group)
+                            st.rerun()
+                    elif row['is_system'] and not pd.isna(row.get('budget_group')):
+                        st.markdown(f"{group_labels.get(row['budget_group'], '—')}")
+                    else:
+                        st.markdown("—")
+                
+                with col_actions:
+                    if not row['is_system']:
+                        if st.button("🗑️", key=f"del_cat_{row['id']}", help="Elimina categoria"):
+                            if delete_budget_category(int(row['id'])):
+                                st.success(f"Eliminata: {row['name']}")
+                                st.rerun()
+                            else:
+                                st.error("Impossibile eliminare.")
+    
+    st.divider()
+    
+    # --- 2. AGGIUNGI NUOVA CATEGORIA ---
+    st.markdown("### ➕ Aggiungi Nuova Categoria")
+    
+    with st.form("add_category_form", clear_on_submit=True):
+        col_n, col_t, col_g = st.columns(3)
+        
+        new_name = col_n.text_input("Nome Categoria", placeholder="es. Abbonamenti")
+        new_type = col_t.selectbox("Tipo", ["Uscita", "Entrata", "Entrambi"])
+        
+        group_options_form = [None, 'necessita', 'desideri', 'risparmio']
+        group_display_form = ['— Nessuno', '🏠 Necessità', '🎉 Desideri', '📈 Risparmio']
+        new_group = col_g.selectbox(
+            "Gruppo 50/30/20",
+            options=group_options_form,
+            format_func=lambda x: group_display_form[group_options_form.index(x)]
+        )
+        
+        submitted = st.form_submit_button("💾 Aggiungi Categoria", type="primary", use_container_width=True)
+        
+        if submitted:
+            if not new_name or not new_name.strip():
+                st.error("❌ Il nome della categoria è obbligatorio.")
+            else:
+                result = insert_budget_category(new_name.strip(), new_type, new_group)
+                if result:
+                    st.success(f"✅ Categoria '{new_name.strip()}' aggiunta!")
+                    st.rerun()
+                else:
+                    st.error("❌ Categoria già esistente o errore nel salvataggio.")

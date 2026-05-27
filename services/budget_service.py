@@ -1,7 +1,82 @@
 import pandas as pd
 import numpy as np
+import hashlib
 from sklearn.linear_model import LinearRegression
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
+
+from database.connection import get_budget_categories, get_categories_by_group
+
+
+# --- HELPER CATEGORIE DINAMICHE ---
+
+# Fallback hardcoded: usato solo se la tabella budget_categories non esiste o è vuota
+_FALLBACK_ENTRATE = ["Stipendio", "Bonus", "Regali", "Dividendi", "Rimborso", "Altro", "Aggiustamento Liquidità"]
+_FALLBACK_USCITE = ["Affitto/Casa", "Spesa Alimentare", "Ristoranti/Svago", "Trasporti", "Viaggi", "Salute", "Shopping", "Bollette", "Altro", "Aggiustamento Liquidità", "Investimento"]
+_FALLBACK_NECESSITA = ["Affitto/Casa", "Spesa Alimentare", "Trasporti", "Bollette", "Salute"]
+_FALLBACK_DESIDERI = ["Ristoranti/Svago", "Shopping", "Viaggi"]
+
+
+def get_categories_for_type(cat_type: str, initial_balance_exists: bool = True) -> List[str]:
+    """
+    Restituisce la lista ordinata di nomi categorie per il tipo dato.
+    Legge dal DB; se la tabella è vuota o non esiste, usa il fallback hardcoded.
+    
+    Per le entrate, include 'Saldo Iniziale' solo se non esiste ancora.
+    """
+    df = get_budget_categories(type_filter=cat_type)
+
+    if df.empty:
+        # Fallback
+        if cat_type == "Entrata":
+            cats = (["Saldo Iniziale"] if not initial_balance_exists else []) + _FALLBACK_ENTRATE
+        else:
+            cats = _FALLBACK_USCITE
+        return cats
+
+    names = df['name'].tolist()
+
+    # Per le entrate: mostra/nascondi Saldo Iniziale
+    if cat_type == "Entrata":
+        if initial_balance_exists and "Saldo Iniziale" in names:
+            names.remove("Saldo Iniziale")
+        elif not initial_balance_exists and "Saldo Iniziale" not in names:
+            names.insert(0, "Saldo Iniziale")
+
+    return names
+
+
+def get_all_category_names() -> List[str]:
+    """
+    Restituisce tutti i nomi di categorie (entrate + uscite + entrambi), senza duplicati, ordinati.
+    Usato per l'editor dello storico movimenti.
+    """
+    df = get_budget_categories()
+    if df.empty:
+        return sorted(list(set(_FALLBACK_ENTRATE + _FALLBACK_USCITE + ["Saldo Iniziale"])))
+    return sorted(df['name'].unique().tolist())
+
+
+def get_budget_group_categories(group: str) -> List[str]:
+    """
+    Restituisce i nomi delle categorie per un dato gruppo 50/30/20.
+    
+    Args:
+        group: 'necessita', 'desideri' o 'risparmio'
+    
+    Returns:
+        Lista di nomi categorie
+    """
+    cats = get_categories_by_group(group)
+    if not cats:
+        # Fallback
+        if group == "necessita":
+            return _FALLBACK_NECESSITA
+        elif group == "desideri":
+            return _FALLBACK_DESIDERI
+        elif group == "risparmio":
+            return ["Investimento"]
+    return cats
+
 
 def get_monthly_summary(selected_month: str, df_budget: pd.DataFrame, df_trans: pd.DataFrame = None) -> Dict[str, float]:
     """
