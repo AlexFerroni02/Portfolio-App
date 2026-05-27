@@ -980,7 +980,8 @@ def render_budget_categories_tab():
                 
                 with col_group:
                     if row['type'] in ('Uscita', 'Entrambi') and not row['is_system']:
-                        current_group = row.get('budget_group')
+                        raw_group = row.get('budget_group')
+                        current_group = None if pd.isna(raw_group) else raw_group
                         group_options = [None, 'necessita', 'desideri', 'risparmio']
                         group_display = ['— Nessuno', '🏠 Necessità', '🎉 Desideri', '📈 Risparmio']
                         current_idx = group_options.index(current_group) if current_group in group_options else 0
@@ -997,7 +998,7 @@ def render_budget_categories_tab():
                         if new_group != current_group:
                             update_budget_category(int(row['id']), budget_group=new_group)
                             st.rerun()
-                    elif row['is_system'] and row.get('budget_group'):
+                    elif row['is_system'] and not pd.isna(row.get('budget_group')):
                         st.markdown(f"{group_labels.get(row['budget_group'], '—')}")
                     else:
                         st.markdown("—")
