@@ -60,14 +60,31 @@ def build_previous_close_lookup(df_prices: pd.DataFrame) -> dict[int, float]:
 def fetch_intraday_quote(ticker: str) -> dict[str, Any]:
     """Fetch latest intraday quote for a ticker using Yahoo Finance."""
     try:
-        history = yf.Ticker(ticker).history(period="2d", interval="5m", auto_adjust=False)
+        t = yf.Ticker(ticker)
+        history = t.history(period="2d", interval="5m", auto_adjust=False)
         if history.empty:
             raise QuoteFetchError(f"No intraday data for ticker {ticker}")
+        
+        # Get yesterday's close from the history (no extra network request)
+        previous_close = None
+        last_date = history.index[-1].date()
+        prev_day_history = history[history.index.date < last_date]
+        if not prev_day_history.empty:
+            previous_close = float(prev_day_history["Close"].iloc[-1])
+        
+        # Fallback to fast_info if history only contains one day
+        if previous_close is None or previous_close == 0.0:
+            try:
+                previous_close = float(t.fast_info.get("previousClose"))
+            except Exception:
+                pass
+                
         timestamp = pd.Timestamp(history.index[-1]).to_pydatetime()
         return {
             "price": float(history["Close"].iloc[-1]),
             "timestamp": timestamp,
             "source": "intraday",
+            "previous_close": previous_close,
         }
     except Exception as exc:
         LOGGER.error("Quote fetch failed", extra={"ticker": ticker, "error": str(exc)})
@@ -122,7 +139,12 @@ def build_single_live_row(
     ticker = position["ticker"]
     mapping_id = int(position["mapping_id"])
     quote = live_quotes.get(ticker, {})
-    previous_close = float(previous_close_lookup.get(mapping_id, 0.0))
+    
+    # Use previous close from yfinance quote if available, fallback to database close
+    previous_close = quote.get("previous_close")
+    if previous_close is None or pd.isna(previous_close) or previous_close == 0.0:
+        previous_close = float(previous_close_lookup.get(mapping_id, 0.0))
+        
     current_price = float(quote.get("price", previous_close))
     quantity = float(position["quantity"])
     market_value = quantity * current_price

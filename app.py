@@ -61,7 +61,16 @@ if missing_isins:
                     if result is not None:
                         saved += 1
                 if saved > 0:
-                    st.success(f"Mappatura salvata ({saved} asset)! Ricarico la pagina...")
+                    # Carica i dati correnti aggiornati per la sincronizzazione dei prezzi
+                    df_trans_curr = get_data("transactions")
+                    df_map_curr = get_data("mapping")
+                    
+                    with st.spinner("Scarico i prezzi storici per i nuovi asset..."):
+                        from services.data_service import sync_prices
+                        sync_prices(df_trans_curr, df_map_curr)
+                        
+                    st.success(f"Mappatura salvata ({saved} asset) e prezzi scaricati con successo!")
+                    st.cache_data.clear()
                     st.rerun()
                 else:
                     st.error("Nessuna mappatura salvata. Verifica i dati inseriti.")
