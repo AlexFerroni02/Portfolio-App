@@ -142,3 +142,30 @@ def test_extract_last_quote_update_handles_mixed_timezone_values():
 def test_is_market_open_borsa_italiana_window(input_dt, expected):
     """Market status should follow Borsa Italiana hours and weekday rules."""
     assert is_market_open(input_dt) is expected
+
+
+def test_build_live_rows_uses_quote_previous_close_if_present():
+    """Live rows must use the previous close from yfinance quote if present."""
+    positions = pd.DataFrame(
+        [
+            {
+                "mapping_id": 1,
+                "product": "Asset A",
+                "category": "Azionario",
+                "ticker": "AAA.MI",
+                "quantity": 2.0,
+                "net_invested": 180.0,
+            }
+        ]
+    )
+
+    # In this case, quote has previous_close=95.0, but database has 100.0.
+    # It must prefer the quote's previous_close (95.0).
+    rows = build_live_rows(positions, {1: 100.0}, {"AAA.MI": {"price": 105.0, "previous_close": 95.0, "source": "intraday"}})
+
+    assert len(rows) == 1
+    assert rows.iloc[0]["previous_close"] == pytest.approx(95.0)
+    assert rows.iloc[0]["current_price"] == pytest.approx(105.0)
+    assert rows.iloc[0]["day_change_abs"] == pytest.approx(20.0) # 2 * (105.0 - 95.0) = 20.0
+    assert rows.iloc[0]["day_change_pct"] == pytest.approx(10.526315789)
+

@@ -504,6 +504,24 @@ def _fetch_justetf_playwright(isin):
     except Exception:
         return {}, {}
 
+def _is_today_price_final(ticker: str) -> bool:
+    """Verifica se il mercato per il ticker dato si è già concluso per oggi."""
+    from zoneinfo import ZoneInfo
+    rome_tz = ZoneInfo("Europe/Rome")
+    now = datetime.now(rome_tz)
+    
+    t = ticker.upper().strip()
+    
+    # Ticker europei
+    is_european = any(t.endswith(suffix) for suffix in ['.MI', '.PA', '.DE', '.L', '.AS', '.BR', '.MC', '.LS'])
+    
+    if is_european:
+        # Chiusura alle 17:30, consideriamo finale dopo le 18:00 italiane
+        return now.hour >= 18
+    else:
+        # Chiusura USA alle 22:00 italiane, consideriamo finale dopo le 22:30 italiane
+        return now.hour > 22 or (now.hour == 22 and now.minute >= 30)
+
 def sync_prices(df_trans, df_map):
     """
     Scarica i prezzi da Yahoo Finance per TUTTI gli asset mappati (posseduti e venduti).
@@ -551,12 +569,21 @@ def sync_prices(df_trans, df_map):
         isin = ticker_row['isin'].iloc[0]
         is_owned = isin in owned_isins
 
+        # Determina se la giornata di borsa di oggi è conclusa per questo ticker
+        today_final = _is_today_price_final(t)
+
         # Per asset venduti, scarica solo fino alla data dell'ultima transazione
         if is_owned:
-            end_date = today + timedelta(days=1)
+            if today_final:
+                end_date = today + timedelta(days=1)
+                target_check = today
+            else:
+                end_date = today
+                target_check = today - timedelta(days=1)
         else:
             last_tx_date = df_trans[df_trans['isin'] == isin]['date'].max()
             end_date = pd.to_datetime(last_tx_date).date() + timedelta(days=1)
+            target_check = pd.to_datetime(last_tx_date).date()
         
         # --- LOGICA INCREMENTALE ---
         start_date = datetime(2020, 1, 1).date() # Default se non ho dati
@@ -567,12 +594,14 @@ def sync_prices(df_trans, df_map):
                 last_date_in_db = existing_prices['date'].max().date()
                 
                 # Se abbiamo dati fino alla data target, saltiamo
-                target_check = today - timedelta(days=1) if is_owned else end_date - timedelta(days=2)
                 if last_date_in_db >= target_check:
                     bar.progress((i + 1) / len(mapping_ids))
                     continue
                 else:
-                    start_date = last_date_in_db + timedelta(days=1)
+                    if last_date_in_db == today:
+                        start_date = today
+                    else:
+                        start_date = last_date_in_db + timedelta(days=1)
         
         # Se start_date è oltre end_date, non scaricare nulla
         if start_date >= end_date:
@@ -600,7 +629,6 @@ def sync_prices(df_trans, df_map):
                 hist['date'] = pd.to_datetime(hist['date']).dt.normalize() # Normalize subito
                 new_data.append(hist)
             else:
-                # Se è vuoto, potrebbe essere festa o errore, ma non bloccante
                 pass
 
         except Exception as e:
